@@ -18,6 +18,7 @@ interface GameContextProps extends GameState {
     makeGuess: (countryCode: string) => void;
     restartGame: () => void;
     startGame: (config?: { mode: GameType, region: Region }) => void;
+    exitGame: () => void;
     gameType: GameType;
     region: Region;
     language: Language;
@@ -123,6 +124,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         startGame({ mode: current.gameType, region: current.region });
     };
 
+    const exitGame = () => {
+        setScore(0);
+        setAttempts(0);
+        setCountryStatus({});
+        setTargetCountry(null);
+        setUsedCountries(new Set());
+        setGameState('loading');
+        setIsTransitioning(false);
+    };
+
     const makeGuess = (countryCode: string) => {
         // Read fresh state from ref
         const current = stateRef.current;
@@ -195,7 +206,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     return (
-        <GameContext.Provider value={{ lives: 3 - attempts, score, targetCountry, gameState, makeGuess, restartGame, countryStatus, startGame, gameType, region, language, setLanguage, filteredCountries, geoJson, isTransitioning }}>
+        <GameContext.Provider value={{ lives: 3 - attempts, score, targetCountry, gameState, makeGuess, restartGame, exitGame, countryStatus, startGame, gameType, region, language, setLanguage, filteredCountries, geoJson, isTransitioning }}>
             {children}
         </GameContext.Provider>
     );

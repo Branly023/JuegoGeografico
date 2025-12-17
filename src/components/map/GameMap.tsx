@@ -60,6 +60,9 @@ const MapController = ({ bounds }: { bounds: any }) => {
     useEffect(() => {
         if (bounds) {
             map.flyToBounds(bounds, { padding: [50, 50], duration: 1.5, easeLinearity: 0.5 });
+        } else {
+            // Reset to default view (World)
+            map.flyTo([20, 0], 2.5, { duration: 1.5, easeLinearity: 0.5 });
         }
     }, [bounds, map]);
     return null;
@@ -69,14 +72,16 @@ interface GameMapProps {
     onGuess?: (code: string) => void;
     countryStatus?: Record<string, string>;
     overrideTarget?: any;
+    isTransitioning?: boolean;
 }
 
-const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget }: GameMapProps = {}) => {
-    const { geoJson, makeGuess, countryStatus: ctxStatus, filteredCountries, region, isTransitioning, targetCountry: ctxTarget } = useGame();
+const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransitioning: propsTransitioning }: GameMapProps = {}) => {
+    const { geoJson, makeGuess, countryStatus: ctxStatus, filteredCountries, region, isTransitioning: ctxTransitioning, targetCountry: ctxTarget } = useGame();
 
     // Merge logic: Props take precedence
     const countryStatus = propsStatus || ctxStatus;
     const targetCountry = overrideTarget || ctxTarget;
+    const isTransitioning = propsTransitioning !== undefined ? propsTransitioning : ctxTransitioning;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [bounds, setBounds] = useState<any>(null);
@@ -120,6 +125,9 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget }: GameMa
                     setBounds(b);
                 }
             }
+        } else {
+            // Reset bounds when not transitioning
+            setBounds(null);
         }
     }, [isTransitioning, targetCountry, geoJson]);
 
@@ -258,7 +266,8 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget }: GameMa
                     onEachFeature={onEachFeature}
                 />
 
-                {bounds && <MapController bounds={bounds} />}
+                {/* Map Controller handles flying */}
+                <MapController bounds={bounds} />
             </MapContainer>
         </div>
     );

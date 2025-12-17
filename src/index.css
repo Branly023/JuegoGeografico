@@ -178,3 +178,22 @@ body,
     opacity: 1;
   }
 }
+
+/* Failed country blink animation for multiplayer */
+@keyframes blink-red {
+
+  0%,
+  100% {
+    fill: #EF4444;
+    fill-opacity: 0.9;
+  }
+
+  50% {
+    fill: #7F1D1D;
+    fill-opacity: 0.5;
+  }
+}
+
+.animate-blink-red {
+  animation: blink-red 0.5s ease-in-out infinite;
+}

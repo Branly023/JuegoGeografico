@@ -1,8 +1,8 @@
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
 
 const HUD = () => {
-    const { score, targetCountry, gameState, gameType, region, language } = useGame();
+    const { score, targetCountry, gameState, gameType, region, language, exitGame } = useGame();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prevScore = useRef<any>(score);
@@ -24,7 +24,22 @@ const HUD = () => {
         : '';
 
     return (
-        <header className="relative z-50 w-full max-w-7xl mx-auto px-6 py-4 flex items-center justify-center pointer-events-none">
+        <header className="relative z-50 w-full max-w-7xl mx-auto px-6 py-4 flex items-center justify-between pointer-events-none">
+            {/* Left: Exit Button */}
+            <div className="pointer-events-auto">
+                <button
+                    onClick={() => {
+                        if (window.confirm("¿Seguro que quieres salir de la partida?")) {
+                            exitGame();
+                            window.location.href = '/';
+                        }
+                    }}
+                    className="bg-red-500/20 text-red-400 hover:bg-red-500/40 px-3 py-2 rounded text-xs border border-red-500/30 transition-colors font-bold"
+                >
+                    SALIR
+                </button>
+            </div>
+
             {/* Center: Target Display (Flag or Name) */}
             <div className="flex flex-col items-center pointer-events-auto">
                 {targetCountry && (
@@ -72,6 +87,11 @@ const HUD = () => {
                 {!targetCountry && gameState === 'loading' && (
                     <div className="text-slate-500 animate-pulse">Initializing...</div>
                 )}
+            </div>
+
+            {/* Right: Placeholder for symmetry (optional score display) */}
+            <div className="w-24 pointer-events-auto text-right">
+                <span className="text-xs text-soft-gray font-mono">🏆 {score}</span>
             </div>
         </header>
     );
