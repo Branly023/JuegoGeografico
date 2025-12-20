@@ -1,13 +1,15 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useMultiplayer } from '../../context/MultiplayerContext';
 import { useGame } from '../../context/GameContext';
 import { useAuth } from '../../context/AuthContext';
 import GameMap from '../map/GameMap';
+import ConfirmModal from '../common/ConfirmModal';
 
 const MultiplayerGame: React.FC = () => {
     const { gameState, players, submitAnswer, leaveRoom, guessedCountries, failedCountryAnimation } = useMultiplayer();
     const { filteredCountries } = useGame(); // Use this to lookup country details
     const { user } = useAuth();
+    const [showSurrenderConfirm, setShowSurrenderConfirm] = useState(false);
 
     // Refs for stable callbacks
     const gameStateRef = React.useRef(gameState);
@@ -86,13 +88,20 @@ const MultiplayerGame: React.FC = () => {
     }, [targetCountryCode, filteredCountries]);
 
     // Convert guessedCountries to countryStatus format for GameMap
+    // Convert guessedCountries to countryStatus format for GameMap
     const countryStatus = useMemo(() => {
         const status: Record<string, string> = {};
         Object.entries(guessedCountries).forEach(([code, result]) => {
             status[code] = result === 'correct' ? 'correct_1' : 'failed';
         });
+
+        // Force 'failed' status for the animated country during zoom
+        if (failedCountryAnimation) {
+            status[failedCountryAnimation] = 'failed';
+        }
+
         return status;
-    }, [guessedCountries]);
+    }, [guessedCountries, failedCountryAnimation]);
 
 
     // Handle Guess (Stable Callback)
@@ -104,11 +113,13 @@ const MultiplayerGame: React.FC = () => {
         console.log(`🌍 Map Clicked: ${code}`);
 
         // Checks using REFS to avoid re-creation
-        if (!currentUser) return;
+        if (!currentUser) { console.log("Blocked: No User"); return; }
         if (!currentGameState) { console.log("Blocked: No Game State"); return; }
 
         // Check Turn
         const isTurn = currentUser.id === currentGameState.current_turn;
+        console.log(`👤 User: ${currentUser.id}, Turn: ${currentGameState.current_turn}, IsTurn: ${isTurn}`);
+
         if (!isTurn) { console.log("Blocked: Not My Turn"); return; }
 
         // Prevent clicking on already guessed
@@ -148,7 +159,12 @@ const MultiplayerGame: React.FC = () => {
             }
         }
 
-        await submitAnswer(isCorrect, nextQuestion);
+        await submitAnswer({
+            isCorrect,
+            guessedCountry: code,
+            nextQuestion,
+            turnAtClick: currentGameState.current_turn
+        });
 
     }, [submitAnswer, filteredCountries]); // Added filteredCountries dependency
 
@@ -205,11 +221,7 @@ const MultiplayerGame: React.FC = () => {
                             : `Turno de: ${currentTurnPlayer ? (currentTurnPlayer.profile?.username || 'Jugador') : '...'}`}
                     </div>
                     <button
-                        onClick={() => {
-                            if (window.confirm("¿Seguro que quieres rendirte?")) {
-                                leaveRoom();
-                            }
-                        }}
+                        onClick={() => setShowSurrenderConfirm(true)}
                         className="bg-red-500/20 text-red-400 hover:bg-red-500/40 px-3 py-1 rounded text-xs border border-red-500/30 transition-colors"
                     >
                         RENDIRSE
@@ -291,6 +303,21 @@ const MultiplayerGame: React.FC = () => {
                     )}
                 </main>
             </div>
+
+            {/* Surrender Confirmation Modal */}
+            <ConfirmModal
+                isOpen={showSurrenderConfirm}
+                title="¿Rendirse?"
+                message="Perderás todos tus puntos y se te contará como derrota. ¿Estás seguro de que deseas abandonar la partida?"
+                confirmText="Sí, Rendirse"
+                cancelText="Continuar Luchando"
+                variant="danger"
+                onConfirm={() => {
+                    leaveRoom();
+                    setShowSurrenderConfirm(false);
+                }}
+                onCancel={() => setShowSurrenderConfirm(false)}
+            />
         </div>
     );
 };

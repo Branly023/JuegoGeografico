@@ -58,6 +58,12 @@ class AudioService {
         this.playTone(200, 'sawtooth', 0.6, 0.6);
     }
 
+    playTick() {
+        if (!this.ctx) return;
+        // Short high-pitched tick
+        this.playTone(800, 'sine', 0.05);
+    }
+
     playWin() {
         if (!this.ctx) return;
         // Victory fanfare

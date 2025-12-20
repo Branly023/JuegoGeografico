@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { supabase } from '../services/supabase';
 import { useAuth } from './AuthContext';
 import { RealtimeChannel } from '@supabase/supabase-js';
+import { audioService } from '../services/audio';
 
 // Types matches DB schema approximately
 export interface Room {
@@ -63,7 +64,7 @@ interface MultiplayerContextType {
     leaveRoom: () => Promise<void>;
     toggleReady: () => Promise<void>;
     startGame: (initialQuestion: any) => Promise<void>;
-    submitAnswer: (isCorrect: boolean, nextQuestion?: any, isTimeout?: boolean) => Promise<void>;
+    submitAnswer: (params: { isCorrect: boolean, guessedCountry: string | null, nextQuestion?: any, isTimeout?: boolean, turnAtClick?: string }) => Promise<void>;
     sendInvite: (friendId: string) => Promise<void>;
     declineInvite: (inviteId: string) => Promise<void>;
     invites: any[];
@@ -95,7 +96,13 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const [gameMoves, setGameMoves] = useState<GameMove[]>([]);
     const [guessedCountries, setGuessedCountries] = useState<Record<string, 'correct' | 'failed'>>({});
     const [questionAttempts, setQuestionAttempts] = useState<Set<string>>(new Set()); // player_ids who attempted current question
+
+
     const [failedCountryAnimation, setFailedCountryAnimation] = useState<string | null>(null);
+
+    // Audio Logic Refs
+    const processedMovesRef = useRef<Set<string>>(new Set());
+    const lastTimeRef = useRef<number>(0);
 
     // Ref to prevent double-submission (Infinite Loop Fix)
     const submittingRef = useRef(false);
@@ -157,7 +164,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setGuessedCountries(newGuessedCountries);
         setQuestionAttempts(currentAttempts);
 
-    }, [gameMoves, gameState]); // Dependency on gameState mainly for current_question context
+    }, [gameMoves, gameState?.current_question, gameState?.round]); // Only recompute if moves, question, or round changes
 
     const fetchPlayers = useCallback(async (roomId: string) => {
         addLog(`🔄 fetching players for ${roomId}...`);
@@ -421,7 +428,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }, [room?.status, room?.id, gameState, addLog]);
 
     // 2. Create Room
-    const createRoom = async (gameMode: string = 'deathmatch') => {
+    const createRoom = useCallback(async (gameMode: string = 'deathmatch') => {
         if (!user) return null;
         setLoading(true);
         setError(null);
@@ -463,10 +470,10 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         } finally {
             setLoading(false);
         }
-    };
+    }, [user, fetchPlayers, subscribeToRoom, subscribeToGame, subscribeToMoves]);
 
     // 3. Join Room
-    const joinRoom = async (code: string) => {
+    const joinRoom = useCallback(async (code: string) => {
         addLog(`🚪 Joining room ${code}...`);
         if (!user) {
             addLog(`❌ No user found for join.`);
@@ -531,9 +538,9 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         } finally {
             setLoading(false);
         }
-    };
+    }, [user, addLog, fetchPlayers, subscribeToRoom, subscribeToGame, subscribeToMoves]);
 
-    const leaveRoom = async () => {
+    const leaveRoom = useCallback(async () => {
         if (!user || !room) return;
 
         await supabase
@@ -555,7 +562,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setRoomChannel(null);
         setGameChannel(null);
         setMovesChannel(null);
-    };
+    }, [user, room, roomChannel, gameChannel, movesChannel]);
 
     // Check for "Last Man Standing" / Win Condition
     useEffect(() => {
@@ -613,7 +620,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }, [players, gameState?.current_turn, room?.status, room?.id, isHost, addLog]);
 
     // 5. Ready System
-    const toggleReady = async () => {
+    const toggleReady = useCallback(async () => {
         if (!user || !room) return;
 
         const me = players.find(p => p.player_id === user.id);
@@ -633,10 +640,10 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (error) {
             addLog(`❌ Error toggling ready: ${error.message}`);
         }
-    };
+    }, [user, room, players, addLog]);
 
     // 6. Start Game
-    const startGame = async (initialQuestion: any) => {
+    const startGame = useCallback(async (initialQuestion: any) => {
         addLog(`🎮 Attempting to start game...`);
         if (!user || !room) {
             addLog(`❌ Start failed: Missing user (${!!user}) or room (${!!room})`);
@@ -710,22 +717,48 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             setError(err.message);
             addLog(`❌ Error starting game: ${err.message}`);
         }
-    };
+    }, [user, room, players, addLog]);
 
 
 
 
     // 8. Player Response
-    const submitAnswer = async (isCorrect: boolean, nextQuestion?: any, isTimeout: boolean = false) => {
+    // 8. Player Response
+    const submitAnswer = useCallback(async ({
+        isCorrect,
+        guessedCountry,
+        nextQuestion,
+        isTimeout = false,
+        turnAtClick
+    }: {
+        isCorrect: boolean;
+        guessedCountry: string | null;
+        nextQuestion?: any;
+        isTimeout?: boolean;
+        turnAtClick?: string;
+    }) => {
         if (!user || !room || !gameState) return;
 
         // Prevent re-entry (Infinite Loop Fix) & Wait for subscription update
         if (submittingRef.current || changingTurn) {
-            console.log("⏳ submitAnswer ignored: Already submitting or changing turn.");
+            console.log("⏳ submitAnswer ignored: Already submitting or changing turn.", { submitting: submittingRef.current, changingTurn });
             return;
         }
 
-        const isMe = user.id === gameState.current_turn;
+        // Use turnAtClick if provided (from stable click event), otherwise fallback to current state (e.g. timeout)
+        const turnToCheck = turnAtClick || gameState.current_turn;
+        const isMe = user.id === turnToCheck;
+
+        console.log(`🧪 submitAnswer payload`, {
+            isTimeout,
+            guessedCountry,
+            currentCountryCode: gameState.current_question?.country,
+            user: user.id,
+            turn: gameState.current_turn,
+            turnAtClick
+        });
+        console.log(`🚀 submitAnswer called. IsMe: ${isMe}, IsTimeout: ${isTimeout}, Guessed: ${guessedCountry}`);
+
 
         // If it's a timeout, the Host calls this. If it's a normal answer, only the turn player (user) calls.
         if (!isMe && !isTimeout) {
@@ -737,7 +770,23 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setChangingTurn(true); // Persist lock until subscription updates
 
         const playerToUpdate = isTimeout ? gameState.current_turn : user.id;
+        // Use the explicitly passed country, OR fall back to target if timeout (optional, usually timeout has no specific country guess)
+        // actually for timeout we might want to log the target as the one "failed" or just leave it null?
+        // User said: "El dato que clickeas Es el dato que insertas"
+        // So we strictly use guessedCountry.
+        // We still need currentCountryCode for the logic below (All Failed check)
         const currentCountryCode = gameState.current_question?.country;
+
+        // Validation: If it's a guess (not timeout), we MUST have a guessedCountry
+        if (!isTimeout && !guessedCountry) {
+            addLog(`🛑 submitAnswer blocked: Missing guessedCountry for guess move.`);
+            setChangingTurn(false);
+            submittingRef.current = false;
+            return;
+        }
+
+        const countryToInsert = isTimeout ? currentCountryCode : guessedCountry;
+
 
         try {
             const me = players.find(p => p.player_id === playerToUpdate);
@@ -747,18 +796,20 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             }
 
             // 1. Log the Move in DB
-            addLog(`📝 Inserting move for ${playerToUpdate}, code: ${currentCountryCode}`);
+            // 1. Log the Move in DB
+            addLog(`📝 Inserting move for ${playerToUpdate}, code: ${countryToInsert}`);
             const { error: moveError } = await supabase.from('game_moves').insert({
                 room_id: room.id,
                 player_id: playerToUpdate,
                 move_type: isTimeout ? 'timeout' : 'guess',
-                country_id: currentCountryCode,
+                country_id: countryToInsert,
                 is_correct: isCorrect,
                 round: gameState.round
             });
 
             if (moveError) {
                 addLog(`❌ Insert Move Error: ${moveError.message} (Code: ${moveError.code}, Details: ${moveError.details})`);
+                setChangingTurn(false); // Unlock immediately if insert fails, as turn won't rotate
                 return; // Stop processing if insertion fails
             } else {
                 addLog(`✅ Move Inserted successfully`);
@@ -774,7 +825,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 const { error } = await supabase.rpc('update_game_stats', {
                     p_room_id: room.id,
                     // p_player_id removed, uses auth.uid()
-                    p_score_delta: 1,
+                    p_score_delta: 1000,
                     p_lives_delta: 0
                 });
                 if (error) addLog(`❌ Error updating score via RPC: ${error.message}`);
@@ -814,7 +865,8 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 newAttempts.add(playerToUpdate);
 
                 // Check if ALL active players have now attempted this question
-                const allPlayersAttempted = activePlayers.every(p => newAttempts.has(p.player_id));
+                const activePlayersFiltered = players.filter(p => p.lives > 0); // Need to re-filter here or trust activePlayers above
+                const allPlayersAttempted = activePlayersFiltered.every(p => newAttempts.has(p.player_id));
 
                 if (allPlayersAttempted && currentCountryCode) {
                     // ALL PLAYERS FAILED: Show animation, then new question
@@ -828,9 +880,9 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                         setFailedCountryAnimation(null);
 
                         // Rotate turn for new question
-                        const currentIndex = activePlayers.findIndex(p => p.player_id === gameState.current_turn);
-                        const nextIndex = (currentIndex + 1) % activePlayers.length;
-                        const nextPlayerId = activePlayers[nextIndex].player_id;
+                        const currentIndex = activePlayersFiltered.findIndex(p => p.player_id === gameState.current_turn);
+                        const nextIndex = (currentIndex + 1) % activePlayersFiltered.length;
+                        const nextPlayerId = activePlayersFiltered[nextIndex].player_id;
                         const nextRound = gameState.round + (nextIndex === 0 ? 1 : 0);
                         const nextCountryCode = nextQuestion ? nextQuestion.country : null; // Usually new question here
 
@@ -849,27 +901,23 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
                 } else {
                     // Not all players have attempted: SAME question, next player
-                    const currentIndex = activePlayers.findIndex(p => p.player_id === gameState.current_turn);
-                    const nextIndex = (currentIndex + 1) % activePlayers.length;
-                    let nextPlayerId = activePlayers[nextIndex].player_id;
+                    const currentIndex = activePlayersFiltered.findIndex(p => p.player_id === gameState.current_turn);
+                    const nextIndex = (currentIndex + 1) % activePlayersFiltered.length;
+                    let nextPlayerId = activePlayersFiltered[nextIndex].player_id;
 
                     // Skip to next player who hasn't attempted yet
                     let rotations = 0;
                     let finalNextPlayerId = nextPlayerId;
                     let finalNextIndex = nextIndex;
 
-                    while (newAttempts.has(finalNextPlayerId) && rotations < activePlayers.length) {
-                        finalNextIndex = (finalNextIndex + 1) % activePlayers.length;
-                        finalNextPlayerId = activePlayers[finalNextIndex].player_id;
+                    while (newAttempts.has(finalNextPlayerId) && rotations < activePlayersFiltered.length) {
+                        finalNextIndex = (finalNextIndex + 1) % activePlayersFiltered.length;
+                        finalNextPlayerId = activePlayersFiltered[finalNextIndex].player_id;
                         rotations++;
                     }
 
-                    const updates: any = {
-                        current_turn: finalNextPlayerId,
-                        round: gameState.round + (finalNextIndex === 0 && finalNextIndex !== currentIndex ? 1 : 0),
-                        time_left: 15
-                        // Keep same current_question - no change!
-                    };
+                    // Local calculation for RPC
+
 
                     const { error: rotError } = await supabase.rpc('rotate_turn', {
                         p_room_id: room.id,
@@ -892,13 +940,19 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         } finally {
             submittingRef.current = false; // Release immediate execution lock
         }
-    };
+    }, [user, room, gameState, players, questionAttempts, changingTurn, addLog]);
 
     // Timer Logic: Driven by the Current Turn Player
     // Because RLS prevents Host from updating game state if not their turn.
     useEffect(() => {
         let interval: any;
         const isMe = user?.id === gameState?.current_turn;
+
+        // Sound Logic: Countdown Tick (Host or any active player can trigger this local sound)
+        if (gameState?.time_left !== undefined && gameState.time_left <= 10 && gameState.time_left > 0 && gameState.time_left !== lastTimeRef.current) {
+            audioService.playTick();
+            lastTimeRef.current = gameState.time_left;
+        }
 
         if (isMe && gameState && room?.status === 'playing') {
             interval = setInterval(async () => {
@@ -911,7 +965,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                     if (error) console.error("Timer Tick Error:", error.message);
                 } else {
                     addLog(`⏰ Timeout (Self)!`);
-                    await submitAnswer(false, undefined, true);
+                    await submitAnswer({ isCorrect: false, guessedCountry: null, nextQuestion: undefined, isTimeout: true });
                 }
             }, 1000);
         }
@@ -919,26 +973,47 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return () => clearInterval(interval);
     }, [user?.id, gameState?.current_turn, gameState?.time_left, room?.status, room?.id, submitAnswer, addLog]);
 
+    // Sound Logic: Game Moves Listeners
+    useEffect(() => {
+        if (gameMoves.length === 0) return;
+
+        // We only want to play sound for NEW moves arriving.
+        const lastMove = gameMoves[gameMoves.length - 1];
+        if (!processedMovesRef.current.has(lastMove.id)) {
+            processedMovesRef.current.add(lastMove.id);
+
+            // Only play if it's recent (prevent spam on reload)
+            const isRecent = (new Date().getTime() - new Date(lastMove.created_at).getTime()) < 5000;
+            if (isRecent) {
+                if (lastMove.is_correct) {
+                    audioService.playSuccess();
+                } else {
+                    audioService.playFailure();
+                }
+            }
+        }
+    }, [gameMoves]);
+
 
     // Send Invite
-    const sendInvite = async (friendId: string) => {
+    const sendInvite = useCallback(async (friendId: string) => {
         if (!user || !room) return;
         await supabase.from('room_invites').insert({
             room_id: room.id,
             from_user: user.id,
             to_user: friendId
         });
-    };
+    }, [user, room]);
 
     // Decline/Accept
-    const declineInvite = async (inviteId: string) => {
+    const declineInvite = useCallback(async (inviteId: string) => {
         await supabase.from('room_invites').delete().eq('id', inviteId);
         setInvites(prev => prev.filter(i => i.id !== inviteId));
-    };
+    }, []);
 
-    const refreshPlayers = async () => {
+    const refreshPlayers = useCallback(async () => {
         if (room?.id) await fetchPlayers(room.id);
-    };
+    }, [room, fetchPlayers]);
 
     return (
         <MultiplayerContext.Provider value={{

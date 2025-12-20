@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { type Country, fetchCountries, fetchGeoJSON } from '../services/api';
 import { audioService } from '../services/audio';
+import { NormalizeCode } from '../utils/mapUtils';
 
 export type GameType = 'flag' | 'name';
 export type Region = 'World' | 'Africa' | 'Americas' | 'Asia' | 'Europe' | 'Oceania';
@@ -56,9 +57,50 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             try {
                 const [countriesData, geoData] = await Promise.all([fetchCountries(), fetchGeoJSON()]);
                 setCountries(countriesData);
-                setGeoJson(geoData);
-                // Pre-set filtered countries to all for initial load
-                setFilteredCountries(countriesData);
+                setCountries(countriesData);
+
+
+                // Inject Microstates (Point Features) into GeoJSON
+                const MICROSTATES = ['VAT', 'SMR', 'MCO', 'GIB', 'JEY', 'GGY', 'LIE', 'AND', 'MLT'];
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const injectedFeatures = [...geoData.features];
+
+                MICROSTATES.forEach(code => {
+                    const country = countriesData.find(c => c.cca3 === code);
+                    // Only inject if it exists in data but MIGHT be missing or null-geometry in map
+                    // We check if it's already a VALID polygon feature to avoid duplicates, 
+                    // but for this simplified map, we know they are missing/null.
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const exists = injectedFeatures.some((f: any) => NormalizeCode(f) === code && f.geometry);
+
+                    if (!exists && country && country.latlng) {
+                        // Create Synthetic Point Feature
+                        injectedFeatures.push({
+                            type: 'Feature',
+                            properties: {
+                                name: country.name.common,
+                                cca3: code,
+                                'ISO3166-1-Alpha-3': code
+                            },
+                            geometry: {
+                                type: 'Point',
+                                coordinates: [country.latlng[1], country.latlng[0]] // GeoJSON is [Lon, Lat]
+                            },
+                            id: code
+                        });
+                        console.log(`Injecting Microstate: ${code} at ${country.latlng}`);
+                    }
+                });
+
+                const finalGeoJson = { ...geoData, features: injectedFeatures };
+                setGeoJson(finalGeoJson);
+
+                // Pre-set filtered countries based on this NEW map
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const validCodes = new Set(injectedFeatures.map((f: any) => NormalizeCode(f)));
+                const validCountries = countriesData.filter(c => validCodes.has(c.cca3));
+
+                setFilteredCountries(validCountries);
                 setGameState('loading');
             } catch (error) {
                 console.error("Failed to load game data", error);
@@ -89,6 +131,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 });
             }
         }
+
+        // Final Filter: Must exist on Map (using CURRENT geoJson which has injected points)
+        if (geoJson) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const validCodes = new Set(geoJson.features.map((f: any) => NormalizeCode(f)));
+            activeList = activeList.filter(c => validCodes.has(c.cca3));
+        }
+
         setFilteredCountries(activeList);
 
         setScore(0);

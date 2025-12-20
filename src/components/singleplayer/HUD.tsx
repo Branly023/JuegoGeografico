@@ -1,8 +1,10 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useGame } from '../../context/GameContext';
+import ConfirmModal from '../common/ConfirmModal';
 
 const HUD = () => {
     const { score, targetCountry, gameState, gameType, region, language, exitGame } = useGame();
+    const [showExitConfirm, setShowExitConfirm] = useState(false);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prevScore = useRef<any>(score);
@@ -28,12 +30,7 @@ const HUD = () => {
             {/* Left: Exit Button */}
             <div className="pointer-events-auto">
                 <button
-                    onClick={() => {
-                        if (window.confirm("¿Seguro que quieres salir de la partida?")) {
-                            exitGame();
-                            window.location.href = '/';
-                        }
-                    }}
+                    onClick={() => setShowExitConfirm(true)}
                     className="bg-red-500/20 text-red-400 hover:bg-red-500/40 px-3 py-2 rounded text-xs border border-red-500/30 transition-colors font-bold"
                 >
                     SALIR
@@ -93,6 +90,21 @@ const HUD = () => {
             <div className="w-24 pointer-events-auto text-right">
                 <span className="text-xs text-soft-gray font-mono">🏆 {score}</span>
             </div>
+
+            {/* Exit Confirmation Modal */}
+            <ConfirmModal
+                isOpen={showExitConfirm}
+                title="¿Salir de la Partida?"
+                message="Tu progreso actual se perderá. ¿Estás seguro de que deseas abandonar?"
+                confirmText="Sí, Salir"
+                cancelText="Continuar Jugando"
+                variant="danger"
+                onConfirm={() => {
+                    exitGame();
+                    window.location.href = '/';
+                }}
+                onCancel={() => setShowExitConfirm(false)}
+            />
         </header>
     );
 };

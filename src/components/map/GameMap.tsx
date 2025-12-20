@@ -1,57 +1,13 @@
 
+import React from 'react';
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { useGame } from '../../context/GameContext';
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 
 // Maps territory codes to their sovereign country code (Game Target)
-const SOVEREIGN_MAPPING: Record<string, string> = {
-    // France and territories
-    'GUF': 'FRA', 'GLP': 'FRA', 'MTQ': 'FRA', 'REU': 'FRA', 'MYT': 'FRA',
-    'SPM': 'FRA', 'WLF': 'FRA', 'PYF': 'FRA', 'NCL': 'FRA', 'MAF': 'FRA', 'BLM': 'FRA',
-    '-99': 'FRA', // Often France in some GeoJSONs
-
-    // Norway
-    'SJM': 'NOR', 'BVT': 'NOR',
-
-    // Kosovo
-    'KOS': 'XKX', 'XKX': 'XKX',
-
-    // Cyprus
-    'NCY': 'CYP', // Northern Cyprus -> Cyprus
-
-    // Somaliland
-    'SOL': 'SOM',
-};
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const NormalizeCode = (feature: any): string => {
-    const p = feature.properties;
-    const code = p['ISO3166-1-Alpha-3'] || p.ISO_A3 || p.iso_a3 || p.ISO3 || p.cca3 || p.ADM0_A3 || p.adm0_a3 || p.GU_A3 || p.SU_A3 || feature.id;
-    const name = p.ADMIN || p.name || p.NAME || '';
-
-    // Specialized Name Checks
-    if (name === 'France') return 'FRA';
-    if (name === 'Norway') return 'NOR';
-    if (name === 'Kosovo') return 'XKX';
-
-    // Check Mapping
-    if (code && SOVEREIGN_MAPPING[code]) {
-        return SOVEREIGN_MAPPING[code];
-    }
-
-    // Handle -99 codes for sovereign territories if code is generic
-    if (code === '-99') {
-        if (name === 'France') return 'FRA';
-        if (name === 'Norway') return 'NOR';
-        if (name === 'Northern Cyprus') return 'CYP';
-        if (name === 'Somaliland') return 'SOM';
-        if (name === 'Kosovo') return 'XKX';
-    }
-
-    return code;
-};
+import { NormalizeCode } from '../../utils/mapUtils';
 
 // Component to handle map bounds updates
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,7 +32,7 @@ interface GameMapProps {
 }
 
 const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransitioning: propsTransitioning }: GameMapProps = {}) => {
-    const { geoJson, makeGuess, countryStatus: ctxStatus, filteredCountries, region, isTransitioning: ctxTransitioning, targetCountry: ctxTarget } = useGame();
+    const { geoJson, makeGuess, countryStatus: ctxStatus, filteredCountries, region, isTransitioning: ctxTransitioning, targetCountry: ctxTarget, gameType } = useGame();
 
     // Merge logic: Props take precedence
     const countryStatus = propsStatus || ctxStatus;
@@ -132,7 +88,7 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
     }, [isTransitioning, targetCountry, geoJson]);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const getStyle = (feature: any) => {
+    const getStyle = useCallback((feature: any) => {
         const code = NormalizeCode(feature);
         // Access latest status from ref
         const status = countryStatusRef.current[code];
@@ -179,7 +135,7 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
             dashArray,
             className: 'transition-all duration-300' // Smooth transitions
         };
-    };
+    }, []); // No dependencies needed as it reads from ref
 
     // Effect to update styles of existing layers when status changes
     useEffect(() => {
@@ -192,10 +148,10 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
                 }
             });
         }
-    }, [countryStatus]); // Depend on countryStatus references update
+    }, [countryStatus, getStyle]); // Depend on countryStatus references update
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const onEachFeature = (feature: any, layer: any) => {
+    const onEachFeature = useCallback((feature: any, layer: any) => {
         layer.on({
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             mouseover: (e: any) => {
@@ -227,7 +183,7 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
                 }
             }
         });
-    };
+    }, [getStyle, onGuess, makeGuess]);
 
     if (!filteredData) return <div className="w-full h-full flex items-center justify-center text-soft-gray animate-pulse font-mono">Initializing Sat-Link...</div>;
 
@@ -259,11 +215,54 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
 
                 <GeoJSON
                     ref={geoJsonRef}
-                    key={region}
+                    key={`${region}-${gameType}`}
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     data={filteredData as any}
                     style={getStyle}
                     onEachFeature={onEachFeature}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    pointToLayer={(feature: any, latlng: L.LatLng) => {
+                        const code = NormalizeCode(feature);
+                        const status = countryStatusRef.current[code];
+
+                        let fillColor = '#3B82F6';
+                        let color = '#ffffff';
+                        let radius = 6;
+                        // Specific sizes for Vatican and San Marino (Static as per user request)
+                        if (code === 'VAT') radius = 8;
+                        else if (code === 'SMR') radius = 7;
+                        // Others like MLT, AND, LIE get default 6 or we can scale them if desired, 
+                        // but user said "others yes [change], doesn't matter". 
+                        // For consistency and visibility, keeping them as CircleMarkers is safest.
+
+                        if (status === 'correct_1') { fillColor = '#22C55E'; color = '#86EFAC'; }
+                        else if (status === 'correct_2') { fillColor = '#F59E0B'; color = '#FCD34D'; }
+                        else if (status === 'correct_3') { fillColor = '#F97316'; color = '#FDBA74'; }
+                        else if (status === 'failed') { fillColor = '#EF4444'; color = '#FCA5A5'; }
+
+                        /* eslint-disable @typescript-eslint/no-explicit-any */
+                        const marker = L.circleMarker(latlng, {
+                            radius: radius,
+                            fillColor: fillColor,
+                            color: color,
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.9,
+                            bubblingMouseEvents: false // Should help
+                        });
+
+                        // Explicitly stop propagation for common events
+                        marker.on('mouseover', (e) => {
+                            L.DomEvent.stopPropagation(e);
+                        });
+                        marker.on('click', (e) => {
+                            L.DomEvent.stopPropagation(e);
+                            if (onGuess) onGuess(code);
+                            else makeGuess(code);
+                        });
+
+                        return marker;
+                    }}
                 />
 
                 {/* Map Controller handles flying */}
@@ -273,4 +272,4 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
     );
 };
 
-export default GameMap;
+export default React.memo(GameMap);
