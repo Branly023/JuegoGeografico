@@ -104,7 +104,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // Audio Logic Refs
     const processedMovesRef = useRef<Set<string>>(new Set());
-    const lastTimeRef = useRef<number>(0);
+
 
     // Ref to prevent double-submission (Infinite Loop Fix)
     const submittingRef = useRef(false);
