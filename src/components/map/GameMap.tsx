@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -8,6 +7,37 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 
 // Maps territory codes to their sovereign country code (Game Target)
 import { NormalizeCode } from '../../utils/mapUtils';
+
+const SMALL_COUNTRIES = new Set([
+    'VAT', // Vaticano
+    'SMR', // San Marino
+    'MCO', // Monaco
+    'GIB', // Gibraltar
+    'AND', // Andorra
+    'MLT', // Malta
+    'LIE', // Liechtenstein
+    'IMN', // Isla de Man
+    'LUX', // Luxemburgo
+    'JEY', // Jersey
+    'GGY', // Guernsey
+    // Oceania Microstates
+    'FJI', // Fiji
+    'KIR', // Kiribati
+    'MHL', // Marshall Islands
+    'FSM', // Micronesia
+    'NRU', // Nauru
+    'PLW', // Palau
+    'WSM', // Samoa
+    'SLB', // Solomon Islands
+    'TON', // Tonga
+    'TUV', // Tuvalu
+    'VUT'  // Vanuatu
+]);
+
+function getFeatureCenter(feature: any): L.LatLng {
+    const layer = L.geoJSON(feature);
+    return layer.getBounds().getCenter();
+}
 
 // Component to handle map bounds updates
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,19 +74,47 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
     const geoJsonRef = useRef<L.GeoJSON>(null);
     // Ref for countryStatus to avoid closure staleness in event handlers
     const countryStatusRef = useRef(countryStatus);
+    const smallMarkersRef = useRef<L.CircleMarker[]>([]);
 
     // Update ref when countryStatus changes
     useEffect(() => {
         countryStatusRef.current = countryStatus;
+
+        // Update styles of manual markers too
+        smallMarkersRef.current.forEach(marker => {
+            // @ts-ignore
+            const code = marker._code;
+            if (code) {
+                const status = countryStatus[code];
+                let fillColor = '#3B82F6';
+                let color = '#ffffff';
+
+                if (status === 'correct_1') { fillColor = '#22C55E'; color = '#86EFAC'; }
+                else if (status === 'correct_2') { fillColor = '#F59E0B'; color = '#FCD34D'; }
+                else if (status === 'correct_3') { fillColor = '#F97316'; color = '#FDBA74'; }
+                else if (status === 'failed') { fillColor = '#EF4444'; color = '#FCA5A5'; }
+
+                marker.setStyle({ fillColor, color });
+            }
+        });
+
     }, [countryStatus]);
+
+
 
     // Filter GeoJSON based on active countries (Region Filter)
     const filteredData = useMemo(() => {
         if (!geoJson || !filteredCountries || !filteredCountries.length) return null;
 
         const validCodes = new Set(filteredCountries.map(c => c.cca3));
-        validCodes.add('XKX'); // Force enable Kosovo
-        validCodes.add('KOS');
+
+        // Only force Kosovo if we are in Europe or World mode
+        // Assuming 'filteredCountries' usually contains it if the API returns it, 
+        // but if we need to force it for Europe specifically:
+        if (region === 'Europe' || region === 'World') {
+            validCodes.add('XKX');
+            validCodes.add('KOS');
+        }
 
         // Filter features
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -67,6 +125,14 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
 
         return { type: 'FeatureCollection', features };
     }, [geoJson, filteredCountries]);
+
+    // Cleanup manual markers on unmount or data change
+    useEffect(() => {
+        return () => {
+            smallMarkersRef.current.forEach(m => m.remove());
+            smallMarkersRef.current = [];
+        };
+    }, [filteredData]); // Dependent on data change
 
     // Effect: Fly to target on Defeat (Transitioning)
     useEffect(() => {
@@ -90,6 +156,12 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const getStyle = useCallback((feature: any) => {
         const code = NormalizeCode(feature);
+
+        // HIDE original polygon for small countries
+        if (SMALL_COUNTRIES.has(code)) {
+            return { opacity: 0, fillOpacity: 0, interactive: false };
+        }
+
         // Access latest status from ref
         const status = countryStatusRef.current[code];
 
@@ -152,38 +224,136 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const onEachFeature = useCallback((feature: any, layer: any) => {
-        layer.on({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            mouseover: (e: any) => {
-                const layer = e.target;
-                layer.setStyle({
-                    weight: 2,
-                    color: '#ffffff',
-                    fillColor: '#3B82F6', // Hover Blue (Brand Europe)
-                    fillOpacity: 0.6,
-                    dashArray: ''
-                });
-                layer.bringToFront();
-            },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            mouseout: (e: any) => {
-                const layer = e.target;
-                const style = getStyle(feature);
-                layer.setStyle(style);
-            },
-            click: () => {
-                const code = NormalizeCode(feature);
-                console.log("Clicked Feature:", feature.properties.ADMIN, "-> Code:", code);
-                if (code) {
-                    if (onGuess) {
-                        onGuess(code);
-                    } else {
-                        makeGuess(code);
+        const code = NormalizeCode(feature);
+
+        if (!SMALL_COUNTRIES.has(code)) {
+            // Enhanced Interaction Handling
+            layer.on({
+                // Mouse Down: Start tracking for Click vs Drag
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                mousedown: (e: any) => {
+                    layer._downLatLng = e.latlng;
+                },
+
+                // Mouse Up: Validate Click (Distance check)
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                mouseup: (e: any) => {
+                    if (!layer._downLatLng) return;
+
+                    // Let's use the robust pixel tracking:
+                    const startPx = layer._map.latLngToContainerPoint(layer._downLatLng);
+                    const endPx = layer._map.latLngToContainerPoint(e.latlng);
+                    const distPx = startPx.distanceTo(endPx);
+
+                    if (distPx > 5) return; // 5 pixels tolerance
+
+                    console.log("Clicked Feature:", feature.properties.ADMIN, "-> Code:", code);
+                    if (code) {
+                        if (onGuess) {
+                            onGuess(code);
+                        } else {
+                            makeGuess(code);
+                        }
                     }
+                },
+
+                // Hover: Controlled State (No React State)
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                mouseover: (e: any) => {
+                    // @ts-ignore
+                    if (propsTransitioning) return; // Don't hover during animations
+
+                    const layer = e.target;
+                    layer._isHovered = true; // Flag for external re-renders to respect
+
+                    layer.setStyle({
+                        weight: 2,
+                        color: '#ffffff',
+                        fillColor: '#3B82F6', // Hover Blue
+                        fillOpacity: 0.6,
+                        dashArray: ''
+                    });
+                    layer.bringToFront();
+                },
+
+                // Mouse Out: Restore
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                mouseout: (e: any) => {
+                    const layer = e.target;
+                    layer._isHovered = false;
+
+                    // Reset to current correct style
+                    const style = getStyle(feature);
+                    layer.setStyle(style);
                 }
-            }
+            });
+            return;
+        }
+
+        // Logic for SMALL COUNTRIES
+        // 1. Disable interaction on the polygon/point layer itself to prevent conflicts (e.g., Italy vs San Marino)
+        layer.options.interactive = false;
+        if (layer.setStyle) {
+            layer.setStyle({ opacity: 0, fillOpacity: 0 });
+        }
+
+        const center = getFeatureCenter(feature);
+        const status = countryStatusRef.current[code];
+
+        let radius = 6;
+        if (code === 'VAT') radius = 8;
+        if (code === 'SMR') radius = 7;
+        if (code === 'MLT') radius = 7;
+        if (code === 'AND') radius = 7;
+
+        let fillColor = '#3B82F6';
+        let color = '#ffffff';
+
+        if (status === 'correct_1') { fillColor = '#22C55E'; color = '#86EFAC'; }
+        else if (status === 'correct_2') { fillColor = '#F59E0B'; color = '#FCD34D'; }
+        else if (status === 'correct_3') { fillColor = '#F97316'; color = '#FDBA74'; }
+        else if (status === 'failed') { fillColor = '#EF4444'; color = '#FCA5A5'; }
+
+        // 2. Create independent marker using SVG renderer for fixed size
+        const marker = L.circleMarker(center, {
+            radius,
+            fillColor,
+            color,
+            weight: 2,
+            fillOpacity: 0.9,
+            renderer: L.svg(), // Force SVG to prevent zooming scaling issues
+            interactive: true,
+            bubblingMouseEvents: false
         });
-    }, [getStyle, onGuess, makeGuess]);
+
+        // Attach code to marker for future updates
+        // @ts-ignore
+        marker._code = code;
+
+        marker.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+            console.log("Clicked Small Country:", code);
+            if (onGuess) onGuess(code);
+            else makeGuess(code);
+        });
+
+        // Add to map safely
+        const addToMap = () => {
+            if (layer._map) {
+                marker.addTo(layer._map);
+                smallMarkersRef.current.push(marker);
+                // Ensure small markers are on top
+                marker.bringToFront();
+            }
+        };
+
+        if (layer._map) {
+            addToMap();
+        } else {
+            layer.on('add', addToMap);
+        }
+
+    }, [getStyle, onGuess, makeGuess, propsTransitioning]);
 
     if (!filteredData) return <div className="w-full h-full flex items-center justify-center text-soft-gray animate-pulse font-mono">Initializing Sat-Link...</div>;
 
@@ -223,45 +393,14 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     pointToLayer={(feature: any, latlng: L.LatLng) => {
                         const code = NormalizeCode(feature);
-                        const status = countryStatusRef.current[code];
+                        // If it's a small country, return an invisible marker 
+                        // because onEachFeature will add the "Real" CircleMarker.
+                        if (SMALL_COUNTRIES.has(code)) {
+                            return L.circleMarker(latlng, { radius: 0, opacity: 0, fillOpacity: 0, interactive: false });
+                        }
 
-                        let fillColor = '#3B82F6';
-                        let color = '#ffffff';
-                        let radius = 6;
-                        // Specific sizes for Vatican and San Marino (Static as per user request)
-                        if (code === 'VAT') radius = 8;
-                        else if (code === 'SMR') radius = 7;
-                        // Others like MLT, AND, LIE get default 6 or we can scale them if desired, 
-                        // but user said "others yes [change], doesn't matter". 
-                        // For consistency and visibility, keeping them as CircleMarkers is safest.
-
-                        if (status === 'correct_1') { fillColor = '#22C55E'; color = '#86EFAC'; }
-                        else if (status === 'correct_2') { fillColor = '#F59E0B'; color = '#FCD34D'; }
-                        else if (status === 'correct_3') { fillColor = '#F97316'; color = '#FDBA74'; }
-                        else if (status === 'failed') { fillColor = '#EF4444'; color = '#FCA5A5'; }
-
-                        /* eslint-disable @typescript-eslint/no-explicit-any */
-                        const marker = L.circleMarker(latlng, {
-                            radius: radius,
-                            fillColor: fillColor,
-                            color: color,
-                            weight: 2,
-                            opacity: 1,
-                            fillOpacity: 0.9,
-                            bubblingMouseEvents: false // Should help
-                        });
-
-                        // Explicitly stop propagation for common events
-                        marker.on('mouseover', (e) => {
-                            L.DomEvent.stopPropagation(e);
-                        });
-                        marker.on('click', (e) => {
-                            L.DomEvent.stopPropagation(e);
-                            if (onGuess) onGuess(code);
-                            else makeGuess(code);
-                        });
-
-                        return marker;
+                        // Default behavior for other points (if any)
+                        return L.circleMarker(latlng);
                     }}
                 />
 

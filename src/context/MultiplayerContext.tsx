@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../services/supabase';
 import { useAuth } from './AuthContext';
+import { audioService } from '../services/audio'; // Restored
 import { RealtimeChannel } from '@supabase/supabase-js';
-import { audioService } from '../services/audio';
+import { useGame } from './GameContext';
 
 // Types matches DB schema approximately
 export interface Room {
@@ -45,7 +46,7 @@ export interface GameMove {
     id: string;
     room_id: string;
     player_id: string;
-    move_type: 'guess' | 'timeout' | 'surrender';
+    move_type: 'guess' | 'timeout' | 'surrender' | 'all_failed';
     country_id?: string;
     is_correct?: boolean;
     round?: number;
@@ -81,6 +82,7 @@ const MultiplayerContext = createContext<MultiplayerContextType | undefined>(und
 
 export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { user } = useAuth();
+    const { filteredCountries } = useGame(); // Access Country Data
     const [room, setRoom] = useState<Room | null>(null);
     const [players, setPlayers] = useState<Player[]>([]);
     const [gameState, setGameState] = useState<GameState | null>(null);
@@ -130,41 +132,47 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const newGuessedCountries: Record<string, 'correct' | 'failed'> = {};
         const currentAttempts = new Set<string>();
 
-        // Sort moves by time to ensure correct order of operations if needed
+        // Sort moves by time to ensure correct order
         const sortedMoves = [...gameMoves].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
         sortedMoves.forEach(move => {
-            // Only consider moves for the current round
-            if (move.round !== gameState.round) return;
+            // Only consider moves for the current round/game logical session if needed
+            // But actually we want ALL history for this game session to show colored map
+            // The previous logic filtered by `move.round !== gameState.round` which might hide previous correct answers?
+            // User requested: "Deriva TODO desde gameMoves" and "status[move.country_id] = 'correct'".
+            // If we want to show ALL correct answers from previous rounds in THIS game, we should NOT filter by round
+            // unless the game clears map every round (unlikely for "Risk"-style or "Complete the map").
+            // Assuming we want to show progress:
 
+            // Standard Guesses
             if (move.move_type === 'guess' && move.country_id) {
                 if (move.is_correct) {
                     newGuessedCountries[move.country_id] = 'correct';
                 } else {
-                    // If it's the current target, track attempt
-                    if (gameState.current_question?.country === move.country_id) {
+                    // Track attempt for current round logic (who moved)
+                    if (move.round === gameState.round) {
                         currentAttempts.add(move.player_id);
                     }
                 }
-            } else if (move.move_type === 'timeout') {
-                // Timeout logic can be complex, often effectively a "failed" attempt if we track it that way
-                if (gameState.current_question?.country) {
+            }
+
+            // Timeouts
+            else if (move.move_type === 'timeout') {
+                if (move.round === gameState.round) {
                     currentAttempts.add(move.player_id);
                 }
             }
-        });
 
-        // Check for "All Failed" condition based on moves is tricky solely from history without "round" markers.
-        // For now, we rely on the specific "All Failed" animation trigger which is ephemeral,
-        // BUT we can persist "failed" status if we want countries to stay red.
-        // Let's keep the ephemeral animation logic separate for now, but update the map with correct/red.
-        // Actually, if a country was failed by everyone, we might want to mark it red permanently? 
-        // usage: guessedCountries is derived.
+            // All Failed (Persistent Fail State)
+            else if (move.move_type === 'all_failed' && move.country_id) {
+                newGuessedCountries[move.country_id] = 'failed';
+            }
+        });
 
         setGuessedCountries(newGuessedCountries);
         setQuestionAttempts(currentAttempts);
 
-    }, [gameMoves, gameState?.current_question, gameState?.round]); // Only recompute if moves, question, or round changes
+    }, [gameMoves, gameState?.round]); // Derived purely from moves and round
 
     const fetchPlayers = useCallback(async (roomId: string) => {
         addLog(`🔄 fetching players for ${roomId}...`);
@@ -869,36 +877,23 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 const allPlayersAttempted = activePlayersFiltered.every(p => newAttempts.has(p.player_id));
 
                 if (allPlayersAttempted && currentCountryCode) {
-                    // ALL PLAYERS FAILED: Show animation, then new question
-                    addLog(`💀 All players failed! Showing animation for ${currentCountryCode}`);
+                    // ALL PLAYERS FAILED: JUST LOG IT. Listener handles the rest.
+                    addLog(`💀 All players failed! Logging 'all_failed' move for ${currentCountryCode}`);
 
-                    // setGuessedCountries(prev => ({ ...prev, [currentCountryCode]: 'failed' })); // Derived from moves
-                    setFailedCountryAnimation(currentCountryCode);
+                    await supabase.from('game_moves').insert({
+                        room_id: room.id,
+                        player_id: user.id,
+                        move_type: 'all_failed',
+                        country_id: currentCountryCode,
+                        is_correct: false,
+                        round: gameState.round
+                    });
 
-                    // Wait for animation, then rotate to next question
-                    setTimeout(async () => {
-                        setFailedCountryAnimation(null);
-
-                        // Rotate turn for new question
-                        const currentIndex = activePlayersFiltered.findIndex(p => p.player_id === gameState.current_turn);
-                        const nextIndex = (currentIndex + 1) % activePlayersFiltered.length;
-                        const nextPlayerId = activePlayersFiltered[nextIndex].player_id;
-                        const nextRound = gameState.round + (nextIndex === 0 ? 1 : 0);
-                        const nextCountryCode = nextQuestion ? nextQuestion.country : null; // Usually new question here
-
-                        // Use RPC
-                        const { error: rotError } = await supabase.rpc('rotate_turn', {
-                            p_room_id: room.id,
-                            p_next_player_id: nextPlayerId,
-                            p_next_round: nextRound,
-                            p_next_country_code: nextCountryCode
-                        });
-
-                        if (rotError) addLog(`❌ Error rotating (All Failed): ${rotError.message}`);
-                        else addLog(`🔄 All failed. Turn rotated to: ${nextPlayerId}`);
-
-                    }, 3000); // 3 second animation
-
+                    // STOP HERE. No local animation. No local rotation.
+                    // The 'gameMoves' listener below will catch this event.
+                    setChangingTurn(false);
+                    submittingRef.current = false;
+                    return;
                 } else {
                     // Not all players have attempted: SAME question, next player
                     const currentIndex = activePlayersFiltered.findIndex(p => p.player_id === gameState.current_turn);
@@ -944,34 +939,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // Timer Logic: Driven by the Current Turn Player
     // Because RLS prevents Host from updating game state if not their turn.
-    useEffect(() => {
-        let interval: any;
-        const isMe = user?.id === gameState?.current_turn;
 
-        // Sound Logic: Countdown Tick (Host or any active player can trigger this local sound)
-        if (gameState?.time_left !== undefined && gameState.time_left <= 10 && gameState.time_left > 0 && gameState.time_left !== lastTimeRef.current) {
-            audioService.playTick();
-            lastTimeRef.current = gameState.time_left;
-        }
-
-        if (isMe && gameState && room?.status === 'playing') {
-            interval = setInterval(async () => {
-                if (submittingRef.current) return; // Don't tick if processing
-
-                if (gameState.time_left > 0) {
-                    const { error } = await supabase.rpc('tick_timer', {
-                        p_room_id: room.id
-                    });
-                    if (error) console.error("Timer Tick Error:", error.message);
-                } else {
-                    addLog(`⏰ Timeout (Self)!`);
-                    await submitAnswer({ isCorrect: false, guessedCountry: null, nextQuestion: undefined, isTimeout: true });
-                }
-            }, 1000);
-        }
-
-        return () => clearInterval(interval);
-    }, [user?.id, gameState?.current_turn, gameState?.time_left, room?.status, room?.id, submitAnswer, addLog]);
 
     // Sound Logic: Game Moves Listeners
     useEffect(() => {
@@ -990,9 +958,57 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 } else {
                     audioService.playFailure();
                 }
+
+                // Trigger Animation & Rotation for All Failed
+                if (lastMove.move_type === 'all_failed' && lastMove.country_id && lastMove.round === gameState?.round) {
+                    // 1. Everyone shows animation
+                    setFailedCountryAnimation(lastMove.country_id);
+
+                    // 2. Turn Player handles rotation logic
+                    const isMyTurn = user?.id === gameState?.current_turn;
+                    // Note: If turn player left, host should probably pick this up, but keeping strict to user req "Solo jugador turno"
+
+                    if (isMyTurn && room) {
+                        setTimeout(async () => {
+                            setFailedCountryAnimation(null); // Clean up local state strictly before rotation
+
+                            // Pick Next Country (Frontend)
+                            let nextCountryCode = null;
+                            if (filteredCountries && filteredCountries.length > 0) {
+                                // Simple random pick logic excluding previous
+                                const available = filteredCountries.filter((c: any) => c.cca3 !== lastMove.country_id);
+                                if (available.length > 0) {
+                                    const rand = available[Math.floor(Math.random() * available.length)];
+                                    nextCountryCode = rand.cca3;
+                                }
+                            }
+
+                            // Calculate Next Player
+
+                            // Validate state availability inside timeout
+                            if (!gameState) return;
+
+                            const activePlayers = players.filter(p => p.lives > 0);
+                            const currentIndex = activePlayers.findIndex(p => p.player_id === gameState.current_turn);
+                            const nextIndex = (currentIndex + 1) % activePlayers.length;
+                            const nextPlayerId = activePlayers[nextIndex].player_id;
+                            const nextRound = gameState.round + (nextIndex === 0 ? 1 : 0);
+
+                            addLog(`🔄 All Failed Rotation -> Next: ${nextPlayerId}, Country: ${nextCountryCode}`);
+
+                            await supabase.rpc('rotate_turn', {
+                                p_room_id: room.id,
+                                p_next_player_id: nextPlayerId,
+                                p_next_round: nextRound,
+                                p_next_country_code: nextCountryCode
+                            });
+
+                        }, 3000);
+                    }
+                }
             }
         }
-    }, [gameMoves]);
+    }, [gameMoves, gameState?.round, gameState?.current_turn, user?.id, filteredCountries, players, room]);
 
 
     // Send Invite

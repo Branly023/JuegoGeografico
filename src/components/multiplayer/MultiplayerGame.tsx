@@ -88,20 +88,26 @@ const MultiplayerGame: React.FC = () => {
     }, [targetCountryCode, filteredCountries]);
 
     // Convert guessedCountries to countryStatus format for GameMap
-    // Convert guessedCountries to countryStatus format for GameMap
     const countryStatus = useMemo(() => {
         const status: Record<string, string> = {};
         Object.entries(guessedCountries).forEach(([code, result]) => {
             status[code] = result === 'correct' ? 'correct_1' : 'failed';
         });
 
-        // Force 'failed' status for the animated country during zoom
-        if (failedCountryAnimation) {
-            status[failedCountryAnimation] = 'failed';
-        }
+        // NOTE: We do NOT merge failedCountryAnimation here anymore.
+        // The failed state comes from the 'all_failed' invalid move history (via guessedCountries).
+        // failedCountryAnimation is used ONLY for the overlay.
 
         return status;
-    }, [guessedCountries, failedCountryAnimation]);
+    }, [guessedCountries]);
+
+
+    // Resolve Failed Country Object for Animation
+    const failedCountryObject = useMemo(() => {
+        if (!failedCountryAnimation || !filteredCountries) return null;
+        // @ts-ignore
+        return filteredCountries.find((c: any) => c.cca3 === failedCountryAnimation);
+    }, [failedCountryAnimation, filteredCountries]);
 
 
     // Handle Guess (Stable Callback)
@@ -145,10 +151,10 @@ const MultiplayerGame: React.FC = () => {
 
         console.log(`Guessed: ${code}, Target: ${targetCode}, Correct: ${isCorrect}`);
 
-        // Generate next question
+        // Generate next question candidate (always needed in case this guess triggers "All Failed" rotation)
         let nextQuestion = undefined;
-        if (isCorrect && filteredCountries && filteredCountries.length > 0) {
-            // Filter out already guessed
+        if (filteredCountries && filteredCountries.length > 0) {
+            // Filter out already guessed AND current target
             const availableCountries = filteredCountries.filter(
                 (c: any) => !currentGuessed[c.cca3] && c.cca3 !== targetCode
             );
@@ -162,11 +168,46 @@ const MultiplayerGame: React.FC = () => {
         await submitAnswer({
             isCorrect,
             guessedCountry: code,
-            nextQuestion,
+            nextQuestion, // Always pass a candidate
             turnAtClick: currentGameState.current_turn
         });
 
     }, [submitAnswer, filteredCountries]); // Added filteredCountries dependency
+
+    // Handle Timeout (Moved from Context to here to access filteredCountries)
+    React.useEffect(() => {
+        if (!gameState || !isMyTurn) return;
+
+        if (gameState.time_left === 0) {
+            console.log("⏰ Timeout Triggered in View!");
+
+            // Generate next question candidate
+            let nextQuestion = undefined;
+            if (filteredCountries && filteredCountries.length > 0) {
+                // Filter out already guessed AND current target
+                // @ts-ignore
+                const currentGuessed = guessedCountriesRef.current;
+                const targetCode = gameState.current_question?.country;
+
+                const availableCountries = filteredCountries.filter(
+                    (c: any) => !currentGuessed[c.cca3] && c.cca3 !== targetCode
+                );
+
+                if (availableCountries.length > 0) {
+                    const randomCountry = availableCountries[Math.floor(Math.random() * availableCountries.length)];
+                    nextQuestion = { type: 'flag', country: randomCountry.cca3, options: [] };
+                }
+            }
+
+            submitAnswer({
+                isCorrect: false,
+                guessedCountry: null, // Timeout has no guess
+                nextQuestion,
+                isTimeout: true,
+                turnAtClick: gameState.current_turn
+            });
+        }
+    }, [gameState?.time_left, isMyTurn, submitAnswer, filteredCountries, gameState?.current_question, gameState?.current_turn]);
 
     if (!gameState) return <div>Loading Game State...</div>;
 
@@ -192,10 +233,7 @@ const MultiplayerGame: React.FC = () => {
             <header className="px-6 py-4 bg-deep/80 border-b border-white/10 flex justify-between items-center z-50">
                 <div className="flex items-center gap-4">
                     <div className="text-2xl font-black text-brand-europe">MAP BATTLE</div>
-                    <div className={`px-3 py-1 rounded text-sm font-mono transition-all ${gameState.time_left <= 5 ? 'bg-red-500/20 text-red-400 animate-pulse' : 'bg-white/10 text-soft-gray'
-                        }`}>
-                        TIME: {gameState.time_left}s
-                    </div>
+                    {/* Timer Removed */}
                 </div>
 
                 <div className="flex-1 flex justify-center">
@@ -263,7 +301,7 @@ const MultiplayerGame: React.FC = () => {
                 <main className="flex-1 relative">
                     <GameMap
                         onGuess={handleGuess}
-                        overrideTarget={targetCountry}
+                        overrideTarget={failedCountryObject || targetCountry}
                         countryStatus={countryStatus}
                         isTransitioning={!!failedCountryAnimation}
                     />
@@ -294,11 +332,19 @@ const MultiplayerGame: React.FC = () => {
 
                     {/* Hard Interaction Blocker for Non-Turn Players */}
                     {(!isMyTurn || !!interstitial || !!failedCountryAnimation) && (
-                        <div className="absolute inset-0 z-50 bg-transparent cursor-not-allowed"
+                        <div
+                            className="absolute inset-0 z-50 bg-transparent cursor-not-allowed"
+                            // Block ALL pointer events to prevent Leaflet from catching them
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onMouseUp={(e) => e.stopPropagation()}
+                            onTouchStart={(e) => e.stopPropagation()}
+                            onTouchEnd={(e) => e.stopPropagation()}
                             onClick={(e) => {
                                 e.stopPropagation();
                                 console.log("🚫 Interaction blocked by overlay");
                             }}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            onWheel={(e) => e.stopPropagation()}
                         />
                     )}
                 </main>
