@@ -37,7 +37,6 @@ export interface GameState {
     current_turn: string; // player_id
     current_question: any; // JSON or specific structure
     round: number;
-    time_left: number;
     updated_at: string;
 }
 
