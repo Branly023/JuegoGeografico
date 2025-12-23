@@ -154,9 +154,24 @@ const MultiplayerGame: React.FC = () => {
         // Generate next question candidate (always needed in case this guess triggers "All Failed" rotation)
         let nextQuestion = undefined;
         if (filteredCountries && filteredCountries.length > 0) {
-            // Filter out already guessed AND current target
+            // Build a set of all countries that should be excluded:
+            // 1. Countries already in currentGuessed (from state)
+            // 2. The current target (which will be marked as correct/failed after this)
+            // 3. If this guess is correct, include it too (since state hasn't updated yet)
+            const excludedCountries = new Set<string>();
+
+            // Add all countries from guessedCountries state
+            Object.keys(currentGuessed).forEach(code => excludedCountries.add(code));
+
+            // Always exclude current target
+            if (targetCode) excludedCountries.add(targetCode);
+
+            // If this is a correct guess, also exclude the guessed country
+            // (which is the same as targetCode, but being explicit for clarity)
+            if (isCorrect && code) excludedCountries.add(code);
+
             const availableCountries = filteredCountries.filter(
-                (c: any) => !currentGuessed[c.cca3] && c.cca3 !== targetCode
+                (c: any) => !excludedCountries.has(c.cca3)
             );
 
             if (availableCountries.length > 0) {
