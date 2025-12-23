@@ -952,7 +952,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                         p_room_id: room.id,
                         p_next_player_id: finalNextPlayerId,
                         p_next_round: gameState.round + (finalNextIndex === 0 && finalNextIndex !== currentIndex ? 1 : 0),
-                        p_next_country_code: null // No new question on simple error
+                        p_next_country_code: gameState.current_question?.country // Keep same country
                     });
 
                     if (rotError) {
