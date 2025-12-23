@@ -96,7 +96,6 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // New: Track game moves and derived state
     const [gameMoves, setGameMoves] = useState<GameMove[]>([]);
     const [guessedCountries, setGuessedCountries] = useState<Record<string, 'correct' | 'failed'>>({});
-    const [questionAttempts, setQuestionAttempts] = useState<Set<string>>(new Set()); // player_ids who attempted current question
 
 
     const [failedCountryAnimation, setFailedCountryAnimation] = useState<string | null>(null);
@@ -120,48 +119,23 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setDebugLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 50));
     }, []);
 
-    // Recompute guessedCountries and questionAttempts whenever gameMoves or gameState changes
+    // Recompute guessedCountries whenever gameMoves changes
     useEffect(() => {
         if (!gameState) {
             setGuessedCountries({});
-            setQuestionAttempts(new Set());
             return;
         }
 
         const newGuessedCountries: Record<string, 'correct' | 'failed'> = {};
-        const currentAttempts = new Set<string>();
 
         // Sort moves by time to ensure correct order
         const sortedMoves = [...gameMoves].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
         sortedMoves.forEach(move => {
-            // Only consider moves for the current round/game logical session if needed
-            // But actually we want ALL history for this game session to show colored map
-            // The previous logic filtered by `move.round !== gameState.round` which might hide previous correct answers?
-            // User requested: "Deriva TODO desde gameMoves" and "status[move.country_id] = 'correct'".
-            // If we want to show ALL correct answers from previous rounds in THIS game, we should NOT filter by round
-            // unless the game clears map every round (unlikely for "Risk"-style or "Complete the map").
-            // Assuming we want to show progress:
-
-            // Standard Guesses
-            if (move.move_type === 'guess' && move.country_id) {
-                if (move.is_correct) {
-                    newGuessedCountries[move.country_id] = 'correct';
-                } else {
-                    // Track attempt for current round logic (who moved)
-                    if (move.round === gameState.round) {
-                        currentAttempts.add(move.player_id);
-                    }
-                }
+            // Standard Guesses - track correct ones
+            if (move.move_type === 'guess' && move.country_id && move.is_correct) {
+                newGuessedCountries[move.country_id] = 'correct';
             }
-
-            // Timeouts
-            else if (move.move_type === 'timeout') {
-                if (move.round === gameState.round) {
-                    currentAttempts.add(move.player_id);
-                }
-            }
-
             // All Failed (Persistent Fail State)
             else if (move.move_type === 'all_failed' && move.country_id) {
                 newGuessedCountries[move.country_id] = 'failed';
@@ -169,9 +143,8 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         });
 
         setGuessedCountries(newGuessedCountries);
-        setQuestionAttempts(currentAttempts);
 
-    }, [gameMoves, gameState?.round]); // Derived purely from moves and round
+    }, [gameMoves, gameState?.round]); // Derived purely from moves
 
     const fetchPlayers = useCallback(async (roomId: string) => {
         addLog(`🔄 fetching players for ${roomId}...`);
@@ -688,7 +661,6 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
             // Reset local game state for new game
             setGuessedCountries({});
-            setQuestionAttempts(new Set());
             setFailedCountryAnimation(null);
             setGameMoves([]); // Clear local moves state
 
@@ -738,7 +710,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         let nextCountryCode = null;
         if (filteredCountries && filteredCountries.length > 0) {
             const available = filteredCountries.filter(
-                (c: any) => c.cca3 !== failedCountry
+                (c: any) => c.cca3 !== failedCountry && !guessedCountries[c.cca3]
             );
             if (available.length > 0) {
                 const rand = available[Math.floor(Math.random() * available.length)];
@@ -761,7 +733,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             p_next_round: nextRound,
             p_next_country_code: nextCountryCode
         });
-    }, [gameState, room, filteredCountries, players]);
+    }, [gameState, room, filteredCountries, players, guessedCountries]);
 
 
     // 8. Player Response
@@ -902,13 +874,25 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 });
                 if (error) addLog(`❌ Error updating lives via RPC: ${error.message}`);
 
-                // Track this player's attempt at current question (for immediate decision, state will update via useEffect)
-                const newAttempts = new Set(questionAttempts); // Use the derived state
-                newAttempts.add(playerToUpdate);
+                // Calculate attempts directly from gameMoves (not derived state which is stale)
+                // This includes all incorrect guesses and timeouts for the current round AND country
+                const attemptedPlayerIds = new Set(
+                    gameMoves
+                        .filter(m =>
+                            m.round === gameState.round &&
+                            m.country_id === currentCountryCode &&
+                            (m.move_type === 'guess' || m.move_type === 'timeout') &&
+                            !m.is_correct
+                        )
+                        .map(m => m.player_id)
+                );
+                // Add the current player's attempt (the move we just inserted)
+                attemptedPlayerIds.add(playerToUpdate);
 
-                // Check if ALL active players have now attempted this question
-                const activePlayersFiltered = players.filter(p => p.lives > 0); // Need to re-filter here or trust activePlayers above
-                const allPlayersAttempted = activePlayersFiltered.every(p => newAttempts.has(p.player_id));
+                // Active players: those with lives > 0, OR the current player (who might have just lost their last life)
+                const activePlayersFiltered = players.filter(p => p.lives > 0 || p.player_id === playerToUpdate);
+                const allPlayersAttempted = activePlayersFiltered.length > 0 &&
+                    activePlayersFiltered.every(p => attemptedPlayerIds.has(p.player_id));
 
                 if (allPlayersAttempted && currentCountryCode) {
                     // ALL PLAYERS FAILED: JUST LOG IT. Listener handles the rest.
@@ -939,7 +923,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                     let finalNextPlayerId = nextPlayerId;
                     let finalNextIndex = nextIndex;
 
-                    while (newAttempts.has(finalNextPlayerId) && rotations < activePlayersFiltered.length) {
+                    while (attemptedPlayerIds.has(finalNextPlayerId) && rotations < activePlayersFiltered.length) {
                         finalNextIndex = (finalNextIndex + 1) % activePlayersFiltered.length;
                         finalNextPlayerId = activePlayersFiltered[finalNextIndex].player_id;
                         rotations++;
@@ -969,7 +953,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         } finally {
             submittingRef.current = false; // Release immediate execution lock
         }
-    }, [user, room, gameState, players, questionAttempts, changingTurn, addLog]);
+    }, [user, room, gameState, players, gameMoves, changingTurn, addLog]);
 
     // Timer Logic: Driven by the Current Turn Player
     // Because RLS prevents Host from updating game state if not their turn.
