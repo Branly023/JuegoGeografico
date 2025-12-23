@@ -132,12 +132,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }
 
+
         // Final Filter: Must exist on Map (using CURRENT geoJson which has injected points)
         if (geoJson) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const validCodes = new Set(geoJson.features.map((f: any) => NormalizeCode(f)));
             activeList = activeList.filter(c => validCodes.has(c.cca3));
         }
+
+        // Global Exclusion: Remove specific countries
+        const EXCLUDED_CODES = ['MAC', 'MDV']; // Macao, Maldives
+        activeList = activeList.filter(c => !EXCLUDED_CODES.includes(c.cca3));
+
 
         setFilteredCountries(activeList);
 

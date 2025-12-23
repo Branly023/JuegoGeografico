@@ -612,8 +612,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             if (nextPlayer) {
                 supabase.from('game_state')
                     .update({
-                        current_turn: nextPlayer.player_id,
-                        time_left: 15
+                        current_turn: nextPlayer.player_id
                     })
                     .eq('room_id', room.id)
                     .then(({ error }) => {
@@ -712,8 +711,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 room_id: room.id,
                 current_turn: startPlayerId,
                 current_question: initialQuestion,
-                round: 1,
-                time_left: 15
+                round: 1
             });
 
             if (gameError) {
@@ -728,6 +726,43 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }, [user, room, players, addLog]);
 
 
+
+
+
+    // Helper to rotate after failure
+    const proceedAfterAllFailed = useCallback(async (failedCountry: string | null) => {
+        setFailedCountryAnimation(null);
+
+        if (!gameState || !room) return;
+
+        // Pick Next Country (frontend)
+        let nextCountryCode = null;
+        if (filteredCountries && filteredCountries.length > 0) {
+            const available = filteredCountries.filter(
+                (c: any) => c.cca3 !== failedCountry
+            );
+            if (available.length > 0) {
+                const rand = available[Math.floor(Math.random() * available.length)];
+                nextCountryCode = rand.cca3;
+            }
+        }
+
+        const activePlayers = players.filter(p => p.lives > 0);
+        const currentIndex = activePlayers.findIndex(
+            p => p.player_id === gameState.current_turn
+        );
+        const nextIndex = (currentIndex + 1) % activePlayers.length;
+
+        const nextPlayerId = activePlayers[nextIndex].player_id;
+        const nextRound = gameState.round + (nextIndex === 0 ? 1 : 0);
+
+        await supabase.rpc('rotate_turn', {
+            p_room_id: room.id,
+            p_next_player_id: nextPlayerId,
+            p_next_round: nextRound,
+            p_next_country_code: nextCountryCode
+        });
+    }, [gameState, room, filteredCountries, players]);
 
 
     // 8. Player Response
@@ -941,6 +976,30 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // Because RLS prevents Host from updating game state if not their turn.
 
 
+    // New: All Failed Logic (Separated from Sound)
+    useEffect(() => {
+        if (!gameState || gameMoves.length === 0) return;
+
+        const lastMove = gameMoves[gameMoves.length - 1];
+
+        // Ensure we only process the 'latest' all_failed move that matches current round
+        if (
+            lastMove.move_type === 'all_failed' &&
+            lastMove.round === gameState.round
+        ) {
+            // 1️⃣ Todos muestran animación
+            setFailedCountryAnimation(lastMove.country_id || null);
+
+            // 2️⃣ SOLO el jugador del turno avanza el juego (y limpia el estado)
+            if (user?.id === gameState.current_turn && room) {
+                const timer = setTimeout(() => {
+                    proceedAfterAllFailed(lastMove.country_id || null);
+                }, 3000);
+                return () => clearTimeout(timer);
+            }
+        }
+    }, [gameMoves, gameState?.round, gameState?.current_turn, user?.id, room, proceedAfterAllFailed]);
+
     // Sound Logic: Game Moves Listeners
     useEffect(() => {
         if (gameMoves.length === 0) return;
@@ -958,57 +1017,9 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 } else {
                     audioService.playFailure();
                 }
-
-                // Trigger Animation & Rotation for All Failed
-                if (lastMove.move_type === 'all_failed' && lastMove.country_id && lastMove.round === gameState?.round) {
-                    // 1. Everyone shows animation
-                    setFailedCountryAnimation(lastMove.country_id);
-
-                    // 2. Turn Player handles rotation logic
-                    const isMyTurn = user?.id === gameState?.current_turn;
-                    // Note: If turn player left, host should probably pick this up, but keeping strict to user req "Solo jugador turno"
-
-                    if (isMyTurn && room) {
-                        setTimeout(async () => {
-                            setFailedCountryAnimation(null); // Clean up local state strictly before rotation
-
-                            // Pick Next Country (Frontend)
-                            let nextCountryCode = null;
-                            if (filteredCountries && filteredCountries.length > 0) {
-                                // Simple random pick logic excluding previous
-                                const available = filteredCountries.filter((c: any) => c.cca3 !== lastMove.country_id);
-                                if (available.length > 0) {
-                                    const rand = available[Math.floor(Math.random() * available.length)];
-                                    nextCountryCode = rand.cca3;
-                                }
-                            }
-
-                            // Calculate Next Player
-
-                            // Validate state availability inside timeout
-                            if (!gameState) return;
-
-                            const activePlayers = players.filter(p => p.lives > 0);
-                            const currentIndex = activePlayers.findIndex(p => p.player_id === gameState.current_turn);
-                            const nextIndex = (currentIndex + 1) % activePlayers.length;
-                            const nextPlayerId = activePlayers[nextIndex].player_id;
-                            const nextRound = gameState.round + (nextIndex === 0 ? 1 : 0);
-
-                            addLog(`🔄 All Failed Rotation -> Next: ${nextPlayerId}, Country: ${nextCountryCode}`);
-
-                            await supabase.rpc('rotate_turn', {
-                                p_room_id: room.id,
-                                p_next_player_id: nextPlayerId,
-                                p_next_round: nextRound,
-                                p_next_country_code: nextCountryCode
-                            });
-
-                        }, 3000);
-                    }
-                }
             }
         }
-    }, [gameMoves, gameState?.round, gameState?.current_turn, user?.id, filteredCountries, players, room]);
+    }, [gameMoves]);
 
 
     // Send Invite
