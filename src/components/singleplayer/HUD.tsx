@@ -14,8 +14,36 @@ const HUD = () => {
     }, [score]);
 
     const LABELS = {
-        en: { SCORE: 'Score', ATTEMPTS: 'Attempts', LOCATE: 'LOCATE TARGET', SUCCESS: 'Victory!', FAILED: 'Failed', RETRY: 'RETRY' },
-        es: { SCORE: 'Puntuación', ATTEMPTS: 'Intentos', LOCATE: 'LOCALIZAR OBJETIVO', SUCCESS: '¡Victoria!', FAILED: 'Fallido', RETRY: 'REINTENTAR' }
+        en: {
+            SCORE: 'Score',
+            ATTEMPTS: 'Attempts',
+            LOCATE: 'LOCATE TARGET',
+            SUCCESS: 'Victory!',
+            FAILED: 'Failed',
+            RETRY: 'RETRY',
+            EXIT: 'EXIT',
+            EXIT_TITLE: 'Leave Game?',
+            EXIT_MESSAGE: 'Your current progress will be lost. Are you sure you want to leave?',
+            EXIT_CONFIRM: 'Yes, Leave',
+            EXIT_CANCEL: 'Keep Playing',
+            GLOBAL: 'GLOBAL',
+            LOADING: 'Initializing...'
+        },
+        es: {
+            SCORE: 'Puntuación',
+            ATTEMPTS: 'Intentos',
+            LOCATE: 'LOCALIZAR OBJETIVO',
+            SUCCESS: '¡Victoria!',
+            FAILED: 'Fallido',
+            RETRY: 'REINTENTAR',
+            EXIT: 'SALIR',
+            EXIT_TITLE: '¿Salir de la Partida?',
+            EXIT_MESSAGE: 'Tu progreso actual se perderá. ¿Estás seguro de que deseas abandonar?',
+            EXIT_CONFIRM: 'Sí, Salir',
+            EXIT_CANCEL: 'Continuar Jugando',
+            GLOBAL: 'GLOBAL',
+            LOADING: 'Cargando...'
+        }
     };
     const t = LABELS[language];
 
@@ -29,18 +57,28 @@ const HUD = () => {
 
     return (
         <header className="relative z-50 w-full max-w-7xl mx-auto px-8 py-6 flex items-center justify-between pointer-events-none">
-            {/* Left: Exit Button */}
-            <div className="pointer-events-auto min-w-[100px]">
+            {/* Left: Exit Button + Retry Button */}
+            <div className="pointer-events-auto flex items-center gap-3 min-w-[180px]">
                 <button
                     onClick={() => setShowExitConfirm(true)}
                     className="bg-red-500/20 text-red-400 hover:bg-red-500/40 px-4 py-2.5 rounded-lg text-sm border border-red-500/30 transition-all duration-300 font-bold hover:scale-105"
                 >
-                    SALIR
+                    {t.EXIT}
                 </button>
+
+                {/* Retry Button - Shows when game is over, next to exit */}
+                {isGameOver && (
+                    <button
+                        onClick={restartGame}
+                        className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-bold rounded-lg shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] transition-all duration-300 transform hover:scale-105 text-sm uppercase tracking-wider"
+                    >
+                        🔄 {t.RETRY}
+                    </button>
+                )}
             </div>
 
             {/* Center: Target Display (Flag or Name) */}
-            <div className="flex flex-col items-center pointer-events-auto gap-4">
+            <div className="flex flex-col items-center pointer-events-auto">
                 {targetCountry && (
                     <div className="relative group perspective-1000">
                         {gameType === 'flag' ? (
@@ -79,27 +117,17 @@ const HUD = () => {
 
                         {/* Region Badge */}
                         <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 px-3 py-1 bg-deep/80 border border-white/10 rounded-lg text-[11px] uppercase text-soft-gray whitespace-nowrap backdrop-blur-sm">
-                            {region === 'World' ? 'GLOBAL' : region.toUpperCase()}
+                            {region === 'World' ? t.GLOBAL : region.toUpperCase()}
                         </div>
                     </div>
                 )}
                 {!targetCountry && gameState === 'loading' && (
-                    <div className="text-slate-500 animate-pulse text-lg">Initializing...</div>
-                )}
-
-                {/* Retry Button - Shows when game is over */}
-                {isGameOver && (
-                    <button
-                        onClick={restartGame}
-                        className="mt-6 px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-bold rounded-xl shadow-[0_0_30px_rgba(16,185,129,0.4)] hover:shadow-[0_0_40px_rgba(16,185,129,0.6)] transition-all duration-300 transform hover:scale-105 text-sm uppercase tracking-wider animate-bounce"
-                    >
-                        🔄 {t.RETRY}
-                    </button>
+                    <div className="text-slate-500 animate-pulse text-lg">{t.LOADING}</div>
                 )}
             </div>
 
             {/* Right: Score Display */}
-            <div className="min-w-[100px] pointer-events-auto text-right">
+            <div className="min-w-[180px] pointer-events-auto text-right">
                 <div className="inline-flex items-center gap-2 bg-deep/60 backdrop-blur-sm px-4 py-2.5 rounded-lg border border-white/10">
                     <span className="text-lg">🏆</span>
                     <span className="text-base text-soft-gray font-mono font-bold">{score}</span>
@@ -109,10 +137,10 @@ const HUD = () => {
             {/* Exit Confirmation Modal */}
             <ConfirmModal
                 isOpen={showExitConfirm}
-                title="¿Salir de la Partida?"
-                message="Tu progreso actual se perderá. ¿Estás seguro de que deseas abandonar?"
-                confirmText="Sí, Salir"
-                cancelText="Continuar Jugando"
+                title={t.EXIT_TITLE}
+                message={t.EXIT_MESSAGE}
+                confirmText={t.EXIT_CONFIRM}
+                cancelText={t.EXIT_CANCEL}
                 variant="danger"
                 onConfirm={() => {
                     exitGame();
