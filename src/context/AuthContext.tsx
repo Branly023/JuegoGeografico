@@ -1,14 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
 import type { Session, User } from '@supabase/supabase-js';
+import type { UserProfile } from '../types/context.types';
 
-// Define the shape of the Profile based on usage
-export interface UserProfile {
-    id: string;
-    username?: string;
-    avatar_url?: string;
-    // Add other fields as they become apparent
-}
+export type { UserProfile };
 
 interface AuthContextType {
     user: User | null;

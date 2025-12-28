@@ -2,60 +2,16 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { supabase } from '../services/supabase';
 import { useAuth } from './AuthContext';
 import { audioService } from '../services/audio'; // Restored
-import { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { useGame } from './GameContext';
+import type { Room, Player, MultiplayerGameState, GameMove } from '../types/context.types';
 
-// Types matches DB schema approximately
-export interface Room {
-    id: string;
-    room_code: string;
-    host_id: string;
-    game_mode: string;
-    status: 'waiting' | 'playing' | 'finished';
-    max_players: number;
-    created_at: string;
-}
-
-export interface Player {
-    id: string; // usually a join table id, but we might verify
-    room_id: string;
-    player_id: string;
-    score: number;
-    lives: number;
-    is_ready: boolean;
-    joined_at: string;
-    // We might join with profiles to get display names, handled in UI or separate fetch
-    profile?: {
-        username: string;
-        avatar_url: string;
-    };
-}
-
-export interface GameState {
-    id: string;
-    room_id: string;
-    current_turn: string; // player_id
-    current_question: any; // JSON or specific structure
-    round: number;
-    updated_at: string;
-}
-
-// New Interface for Game Moves
-export interface GameMove {
-    id: string;
-    room_id: string;
-    player_id: string;
-    move_type: 'guess' | 'timeout' | 'surrender' | 'all_failed';
-    country_id?: string;
-    is_correct?: boolean;
-    round?: number;
-    created_at: string;
-}
+export type { Room, Player, MultiplayerGameState, GameMove };
 
 interface MultiplayerContextType {
     room: Room | null;
     players: Player[];
-    gameState: GameState | null;
+    gameState: MultiplayerGameState | null;
     gameMoves: GameMove[]; // New: Track all game moves
     loading: boolean;
     error: string | null;
@@ -84,7 +40,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const { filteredCountries } = useGame(); // Access Country Data
     const [room, setRoom] = useState<Room | null>(null);
     const [players, setPlayers] = useState<Player[]>([]);
-    const [gameState, setGameState] = useState<GameState | null>(null);
+    const [gameState, setGameState] = useState<MultiplayerGameState | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [roomChannel, setRoomChannel] = useState<RealtimeChannel | null>(null);
@@ -346,7 +302,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 },
                 (payload) => {
                     addLog(`🎲 Game state event: ${payload.eventType}`);
-                    setGameState(payload.new as GameState);
+                    setGameState(payload.new as MultiplayerGameState);
                 }
             )
             .subscribe();
@@ -398,7 +354,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 .then(({ data, error }) => {
                     if (data) {
                         addLog(`✅ Game state fetched manually.`);
-                        setGameState(data as GameState);
+                        setGameState(data as MultiplayerGameState);
                     }
                     if (error) {
                         addLog(`❌ Error fetching game state: ${error.message}`);
@@ -881,7 +837,7 @@ export const MultiplayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
                         .filter(m =>
                             m.round === gameState.round &&
                             m.country_id === currentCountryCode &&
-                            (m.move_type === 'guess' || m.move_type === 'timeout') &&
+                            m.move_type === 'guess' &&
                             !m.is_correct
                         )
                         .map(m => m.player_id)

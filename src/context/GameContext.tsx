@@ -2,18 +2,9 @@ import React, { createContext, useContext, useEffect, useState, useRef } from 'r
 import { type Country, fetchCountries, fetchGeoJSON } from '../services/api';
 import { audioService } from '../services/audio';
 import { NormalizeCode } from '../utils/mapUtils';
+import type { GameType, Region, Language, GameState } from '../types/context.types';
 
-export type GameType = 'flag' | 'name';
-export type Region = 'World' | 'Africa' | 'Americas' | 'Asia' | 'Europe' | 'Oceania';
-export type Language = 'en' | 'es';
-
-interface GameState {
-    lives: number;
-    score: number;
-    targetCountry: Country | null;
-    gameState: 'loading' | 'playing' | 'won' | 'lost';
-    countryStatus: Record<string, 'correct_1' | 'correct_2' | 'correct_3' | 'failed'>;
-}
+export type { GameType, Region, Language, GameState };
 
 interface GameContextProps extends GameState {
     makeGuess: (countryCode: string) => void;
