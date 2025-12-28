@@ -19,6 +19,7 @@ interface GameContextProps extends GameState {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     geoJson: any;
     isTransitioning: boolean;
+    gameKey: number; // Forces map re-render on restart
 }
 
 const GameContext = createContext<GameContextProps | undefined>(undefined);
@@ -42,6 +43,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [language, setLanguage] = useState<Language>('es');
 
     const [usedCountries, setUsedCountries] = useState<Set<string>>(new Set());
+    const [gameKey, setGameKey] = useState(0); // Unique key to force map re-render on restart
 
     useEffect(() => {
         const init = async () => {
@@ -144,6 +146,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setGameState('playing');
         setUsedCountries(new Set());
         setIsTransitioning(false);
+        setGameKey(prev => prev + 1); // Increment to force map re-render
         pickNewTarget(activeList, new Set());
     };
 
@@ -253,7 +256,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     return (
-        <GameContext.Provider value={{ lives: 3 - attempts, score, targetCountry, gameState, makeGuess, restartGame, exitGame, countryStatus, startGame, gameType, region, language, setLanguage, filteredCountries, geoJson, isTransitioning }}>
+        <GameContext.Provider value={{ lives: 3 - attempts, score, targetCountry, gameState, makeGuess, restartGame, exitGame, countryStatus, startGame, gameType, region, language, setLanguage, filteredCountries, geoJson, isTransitioning, gameKey }}>
             {children}
         </GameContext.Provider>
     );

@@ -62,7 +62,7 @@ interface GameMapProps {
 }
 
 const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransitioning: propsTransitioning }: GameMapProps = {}) => {
-    const { geoJson, makeGuess, countryStatus: ctxStatus, filteredCountries, region, isTransitioning: ctxTransitioning, targetCountry: ctxTarget, gameType } = useGame();
+    const { geoJson, makeGuess, countryStatus: ctxStatus, filteredCountries, region, isTransitioning: ctxTransitioning, targetCountry: ctxTarget, gameType, gameKey } = useGame();
 
     // Merge logic: Props take precedence
     const countryStatus = propsStatus || ctxStatus;
@@ -385,7 +385,7 @@ const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransi
 
                 <GeoJSON
                     ref={geoJsonRef}
-                    key={`${region}-${gameType}`}
+                    key={`${region}-${gameType}-${gameKey}`}
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     data={filteredData as any}
                     style={getStyle}
