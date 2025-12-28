@@ -53,7 +53,6 @@ const HUD = () => {
             : targetCountry.name?.common)
         : '';
 
-    const isGameOver = gameState === 'won' || gameState === 'lost';
 
     return (
         <header className="relative z-50 w-full max-w-7xl mx-auto px-8 py-6 flex items-center justify-between pointer-events-none">
@@ -66,16 +65,15 @@ const HUD = () => {
                     {t.EXIT}
                 </button>
 
-                {/* Retry Button - Shows when game is over, next to exit */}
-                {isGameOver && (
-                    <button
-                        onClick={restartGame}
-                        className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-bold rounded-lg shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] transition-all duration-300 transform hover:scale-105 text-sm uppercase tracking-wider"
-                    >
-                        🔄 {t.RETRY}
-                    </button>
-                )}
+                {/* Retry Button - Always visible */}
+                <button
+                    onClick={restartGame}
+                    className="bg-amber-500/20 text-amber-400 hover:bg-amber-500/40 px-4 py-2.5 rounded-lg text-sm border border-amber-500/30 transition-all duration-300 font-bold hover:scale-105"
+                >
+                    {t.RETRY}
+                </button>
             </div>
+
 
             {/* Center: Target Display (Flag or Name) */}
             <div className="flex flex-col items-center pointer-events-auto">
