@@ -54,26 +54,27 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 
                 // Inject Microstates (Point Features) into GeoJSON
-                const MICROSTATES = ['VAT', 'SMR', 'MCO', 'GIB', 'JEY', 'GGY', 'LIE', 'AND', 'MLT'];
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const injectedFeatures = [...geoData.features];
+                // Note: JEY, GGY, GIB removed as they're excluded from game
+                const MICROSTATES = ['VAT', 'SMR', 'MCO', 'LIE', 'AND', 'MLT'];
 
+                // First, remove any existing features for microstates (they often have null/bad geometry)
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const cleanedFeatures = geoData.features.filter((f: any) => {
+                    const code = NormalizeCode(f);
+                    return !MICROSTATES.includes(code);
+                });
+
+                // Then inject fresh point features for each microstate
                 MICROSTATES.forEach(code => {
                     const country = countriesData.find(c => c.cca3 === code);
-                    // Only inject if it exists in data but MIGHT be missing or null-geometry in map
-                    // We check if it's already a VALID polygon feature to avoid duplicates, 
-                    // but for this simplified map, we know they are missing/null.
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const exists = injectedFeatures.some((f: any) => NormalizeCode(f) === code && f.geometry);
-
-                    if (!exists && country && country.latlng) {
-                        // Create Synthetic Point Feature
-                        injectedFeatures.push({
+                    if (country && country.latlng) {
+                        cleanedFeatures.push({
                             type: 'Feature',
                             properties: {
                                 name: country.name.common,
                                 cca3: code,
-                                'ISO3166-1-Alpha-3': code
+                                'ISO3166-1-Alpha-3': code,
+                                ISO_A3: code
                             },
                             geometry: {
                                 type: 'Point',
@@ -81,9 +82,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             },
                             id: code
                         });
-                        console.log(`Injecting Microstate: ${code} at ${country.latlng}`);
+                        console.log(`Injecting Microstate: ${code} at [${country.latlng[1]}, ${country.latlng[0]}]`);
                     }
                 });
+
+                const injectedFeatures = cleanedFeatures;
 
                 const finalGeoJson = { ...geoData, features: injectedFeatures };
                 setGeoJson(finalGeoJson);
@@ -133,8 +136,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             activeList = activeList.filter(c => validCodes.has(c.cca3));
         }
 
-        // Global Exclusion: Remove specific countries
-        const EXCLUDED_CODES = ['MAC', 'MDV']; // Macao, Maldives
+        // Global Exclusion: Remove specific territories that shouldn't be game targets
+        // MAC=Macao, MDV=Maldives, JEY=Jersey, GGY=Guernsey, GIB=Gibraltar, ALA=Åland, FRO=Faroe
+        const EXCLUDED_CODES = ['MAC', 'MDV', 'JEY', 'GGY', 'GIB', 'ALA', 'FRO'];
         activeList = activeList.filter(c => !EXCLUDED_CODES.includes(c.cca3));
 
 

@@ -1,412 +1,559 @@
-import React from 'react';
-import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
+import React, { useEffect, useMemo, useRef, useCallback } from 'react';
+import { Map, MapMarker, MarkerContent, useMap } from '@/components/ui/map';
 import { useGame } from '../../context/GameContext';
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-
-// Maps territory codes to their sovereign country code (Game Target)
 import { NormalizeCode } from '../../utils/mapUtils';
 
 const SMALL_COUNTRIES = new Set([
-    'VAT', // Vaticano
-    'SMR', // San Marino
-    'MCO', // Monaco
-    'GIB', // Gibraltar
-    'AND', // Andorra
-    'MLT', // Malta
-    'LIE', // Liechtenstein
-    'IMN', // Isla de Man
-    'LUX', // Luxemburgo
-    'JEY', // Jersey
-    'GGY', // Guernsey
-    // Oceania Microstates
-    'FJI', // Fiji
-    'KIR', // Kiribati
-    'MHL', // Marshall Islands
-    'FSM', // Micronesia
-    'NRU', // Nauru
-    'PLW', // Palau
-    'WSM', // Samoa
-    'SLB', // Solomon Islands
-    'TON', // Tonga
-    'TUV', // Tuvalu
-    'VUT'  // Vanuatu
+    'VAT', 'SMR', 'MCO', 'AND', 'MLT', 'LIE', 'IMN', 'LUX',
+    'FJI', 'KIR', 'MHL', 'FSM', 'NRU', 'PLW', 'WSM', 'SLB', 'TON', 'TUV', 'VUT'
 ]);
 
-function getFeatureCenter(feature: any): L.LatLng {
-    const layer = L.geoJSON(feature);
-    return layer.getBounds().getCenter();
-}
-
-// Component to handle map bounds updates
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const MapController = ({ bounds }: { bounds: any }) => {
-    const map = useMap();
-    useEffect(() => {
-        if (bounds) {
-            map.flyToBounds(bounds, { padding: [50, 50], duration: 1.5, easeLinearity: 0.5 });
-        } else {
-            // Reset to default view (World)
-            map.flyTo([20, 0], 2.5, { duration: 1.5, easeLinearity: 0.5 });
-        }
-    }, [bounds, map]);
-    return null;
+// Region-specific bounds for map clipping [sw, ne] format: [[lng, lat], [lng, lat]]
+const REGION_BOUNDS: Record<string, [[number, number], [number, number]]> = {
+    'Europe': [[-25, 34], [45, 72]],
+    'Asia': [[25, -15], [180, 75]],
+    'Africa': [[-25, -40], [55, 40]],
+    'Americas': [[-170, -60], [-30, 85]],
+    'Oceania': [[100, -50], [180, 5]],
+    'World': [[-180, -60], [180, 85]]
 };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type FeatureCollection = { type: 'FeatureCollection'; features: any[] };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Feature = any;
 
 interface GameMapProps {
     onGuess?: (code: string) => void;
     countryStatus?: Record<string, string>;
-    overrideTarget?: any;
+    overrideTarget?: { cca3: string; name?: { common?: string } } | null;
     isTransitioning?: boolean;
+}
+
+// Helper to get feature center from GeoJSON geometry
+function getFeatureCenter(feature: Feature): [number, number] {
+    const geometry = feature?.geometry;
+    if (!geometry || !geometry.type) {
+        return [0, 0]; // Return default if geometry is null/undefined
+    }
+    if (geometry.type === 'Point') {
+        return geometry.coordinates as [number, number];
+    }
+    if (geometry.type === 'Polygon') {
+        const coords = geometry.coordinates?.[0];
+        if (!coords || coords.length === 0) return [0, 0];
+        let sumLng = 0, sumLat = 0;
+        coords.forEach(([lng, lat]: [number, number]) => { sumLng += lng; sumLat += lat; });
+        return [sumLng / coords.length, sumLat / coords.length];
+    }
+    if (geometry.type === 'MultiPolygon') {
+        let totalPoints = 0, sumLng = 0, sumLat = 0;
+        geometry.coordinates.forEach((polygon: number[][][]) => {
+            polygon[0].forEach((coord: number[]) => {
+                sumLng += coord[0]; sumLat += coord[1]; totalPoints++;
+            });
+        });
+        if (totalPoints === 0) return [0, 0];
+        return [sumLng / totalPoints, sumLat / totalPoints];
+    }
+    return [0, 0];
+}
+
+// GeoJSON Layer Component
+interface GeoJSONLayerProps {
+    data: FeatureCollection;
+    countryStatus: Record<string, string>;
+    onGuess: (code: string) => void;
+    isTransitioning?: boolean;
+}
+
+function GeoJSONLayer({ data, countryStatus, onGuess, isTransitioning }: GeoJSONLayerProps) {
+    const { map, isLoaded } = useMap();
+    const hoveredFeatureRef = useRef<string | null>(null);
+    const countryStatusRef = useRef(countryStatus);
+
+    // Keep countryStatus ref updated
+    useEffect(() => {
+        countryStatusRef.current = countryStatus;
+    }, [countryStatus]);
+
+    // Hide text labels from base map (country names would spoil the game!)
+    useEffect(() => {
+        if (!map || !isLoaded) return;
+
+        // Wait a bit for style to fully load, then hide all symbol/text layers
+        const hideLabels = () => {
+            const style = map.getStyle();
+            if (!style || !style.layers) return;
+
+            style.layers.forEach(layer => {
+                // Hide any layer that contains text (symbol layers with text-field)
+                if (layer.type === 'symbol') {
+                    try {
+                        map.setLayoutProperty(layer.id, 'visibility', 'none');
+                    } catch (e) {
+                        // Layer might not exist, ignore
+                    }
+                }
+            });
+        };
+
+        // Run immediately and also on style load
+        hideLabels();
+        map.on('styledata', hideLabels);
+
+        return () => {
+            map.off('styledata', hideLabels);
+        };
+    }, [map, isLoaded]);
+
+    // Add GeoJSON source and layers
+    useEffect(() => {
+        if (!map || !isLoaded || !data) return;
+
+        const sourceId = 'countries-source';
+        const fillLayerId = 'countries-fill';
+        const lineLayerId = 'countries-line';
+
+        // Filter out small countries from GeoJSON (they'll be markers)
+        const filteredData: FeatureCollection = {
+            type: 'FeatureCollection',
+            features: data.features.filter((f: Feature) => !SMALL_COUNTRIES.has(NormalizeCode(f)))
+        };
+
+        // Remove existing layers and source if they exist
+        if (map.getLayer(fillLayerId)) map.removeLayer(fillLayerId);
+        if (map.getLayer(lineLayerId)) map.removeLayer(lineLayerId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+
+        // Add source
+        map.addSource(sourceId, {
+            type: 'geojson',
+            data: filteredData,
+            generateId: true
+        });
+
+        // Add fill layer
+        map.addLayer({
+            id: fillLayerId,
+            type: 'fill',
+            source: sourceId,
+            paint: {
+                'fill-color': '#121A33',
+                'fill-opacity': [
+                    'case',
+                    ['boolean', ['feature-state', 'hover'], false],
+                    0.6,
+                    0.5
+                ]
+            }
+        });
+
+        // Add line layer  
+        map.addLayer({
+            id: lineLayerId,
+            type: 'line',
+            source: sourceId,
+            paint: {
+                'line-color': [
+                    'case',
+                    ['boolean', ['feature-state', 'hover'], false],
+                    '#ffffff',
+                    '#3B82F6'
+                ],
+                'line-width': [
+                    'case',
+                    ['boolean', ['feature-state', 'hover'], false],
+                    2,
+                    0.5
+                ]
+            }
+        });
+
+        // Cleanup
+        return () => {
+            try {
+                if (map && map.getLayer && map.getLayer(fillLayerId)) map.removeLayer(fillLayerId);
+                if (map && map.getLayer && map.getLayer(lineLayerId)) map.removeLayer(lineLayerId);
+                if (map && map.getSource && map.getSource(sourceId)) map.removeSource(sourceId);
+            } catch (e) {
+                // Map may have been destroyed, ignore
+            }
+        };
+    }, [map, isLoaded, data]);
+
+    // Update layer colors when countryStatus changes
+    useEffect(() => {
+        if (!map || !isLoaded) return;
+
+        const fillLayerId = 'countries-fill';
+        const lineLayerId = 'countries-line';
+
+        if (!map.getLayer(fillLayerId)) return;
+
+        // Use coalesce to try multiple property keys
+        const codeExpression = ['coalesce',
+            ['get', 'ISO_A3'],
+            ['get', 'ISO3166-1-Alpha-3'],
+            ['get', 'cca3'],
+            ['get', 'ADM0_A3'],
+            ''
+        ];
+
+        // Reverse mapping: normalized code -> raw GeoJSON codes that should also match
+        // This handles special cases where GeoJSON uses different codes
+        const REVERSE_CODE_MAPPING: Record<string, string[]> = {
+            'FRA': ['-99', 'FXX'], // France often has -99 or FXX in GeoJSON
+            'NOR': ['-99'],        // Norway territories
+            'XKX': ['KOS', '-99'], // Kosovo
+            'CYP': ['NCY'],        // Northern Cyprus -> Cyprus
+            'SOM': ['SOL'],        // Somaliland -> Somalia
+        };
+
+        // Build match expressions for fill and line colors
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const fillColorExpression: any[] = ['match', codeExpression];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const lineColorExpression: any[] = ['match', codeExpression];
+
+        Object.entries(countryStatus).forEach(([code, status]) => {
+            let fillColor = '#121A33';
+            let lineColor = '#3B82F6';
+
+            if (status === 'correct_1') { fillColor = '#22C55E'; lineColor = '#86EFAC'; }
+            else if (status === 'correct_2') { fillColor = '#F59E0B'; lineColor = '#FCD34D'; }
+            else if (status === 'correct_3') { fillColor = '#F97316'; lineColor = '#FDBA74'; }
+            else if (status === 'failed') { fillColor = '#EF4444'; lineColor = '#FCA5A5'; }
+
+            // Add the normalized code
+            fillColorExpression.push(code, fillColor);
+            lineColorExpression.push(code, lineColor);
+
+            // Also add any raw GeoJSON codes that map to this normalized code
+            const rawCodes = REVERSE_CODE_MAPPING[code];
+            if (rawCodes) {
+                rawCodes.forEach(rawCode => {
+                    fillColorExpression.push(rawCode, fillColor);
+                    lineColorExpression.push(rawCode, lineColor);
+                });
+            }
+        });
+
+        // Default values
+        fillColorExpression.push('#121A33');
+        lineColorExpression.push('#3B82F6');
+
+        try {
+            map.setPaintProperty(fillLayerId, 'fill-color', [
+                'case',
+                ['boolean', ['feature-state', 'hover'], false],
+                '#3B82F6', // hover color
+                fillColorExpression
+            ]);
+            map.setPaintProperty(lineLayerId, 'line-color', [
+                'case',
+                ['boolean', ['feature-state', 'hover'], false],
+                '#ffffff', // hover color
+                lineColorExpression
+            ]);
+        } catch (e) {
+            console.warn('Failed to update layer colors:', e);
+        }
+    }, [map, isLoaded, countryStatus]);
+
+    // Mouse interactions
+    useEffect(() => {
+        if (!map || !isLoaded || isTransitioning) return;
+
+        const sourceId = 'countries-source';
+        const fillLayerId = 'countries-fill';
+
+        const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
+            if (isTransitioning) return;
+
+            const features = map.queryRenderedFeatures(e.point, { layers: [fillLayerId] });
+
+            // Clear previous hover
+            if (hoveredFeatureRef.current !== null) {
+                map.setFeatureState(
+                    { source: sourceId, id: hoveredFeatureRef.current },
+                    { hover: false }
+                );
+            }
+
+            if (features.length > 0) {
+                const feature = features[0];
+                const id = feature.id as string;
+                hoveredFeatureRef.current = id;
+                map.setFeatureState(
+                    { source: sourceId, id },
+                    { hover: true }
+                );
+                map.getCanvas().style.cursor = 'pointer';
+            } else {
+                hoveredFeatureRef.current = null;
+                map.getCanvas().style.cursor = '';
+            }
+        };
+
+        const handleMouseLeave = () => {
+            if (hoveredFeatureRef.current !== null) {
+                map.setFeatureState(
+                    { source: sourceId, id: hoveredFeatureRef.current },
+                    { hover: false }
+                );
+                hoveredFeatureRef.current = null;
+            }
+            map.getCanvas().style.cursor = '';
+        };
+
+        const handleClick = (e: maplibregl.MapMouseEvent) => {
+            if (isTransitioning) return;
+
+            const features = map.queryRenderedFeatures(e.point, { layers: [fillLayerId] });
+            if (features.length > 0) {
+                const feature = features[0];
+                const code = NormalizeCode(feature);
+                console.log("Clicked Feature:", feature.properties?.ADMIN, "-> Code:", code);
+                if (code) {
+                    onGuess(code);
+                }
+            }
+        };
+
+        map.on('mousemove', fillLayerId, handleMouseMove);
+        map.on('mouseleave', fillLayerId, handleMouseLeave);
+        map.on('click', fillLayerId, handleClick);
+
+        return () => {
+            map.off('mousemove', fillLayerId, handleMouseMove);
+            map.off('mouseleave', fillLayerId, handleMouseLeave);
+            map.off('click', fillLayerId, handleClick);
+        };
+    }, [map, isLoaded, isTransitioning, onGuess]);
+
+    return null;
+}
+
+// Small Country Marker Component
+interface SmallCountryMarkerProps {
+    feature: Feature;
+    code: string;
+    status?: string;
+    onGuess: (code: string) => void;
+}
+
+function SmallCountryMarker({ feature, code, status, onGuess }: SmallCountryMarkerProps) {
+    const [lng, lat] = getFeatureCenter(feature);
+
+    // Skip rendering if coordinates are invalid (at [0,0])
+    if (lng === 0 && lat === 0) {
+        console.warn(`SmallCountryMarker: Invalid coordinates for ${code}, skipping render`);
+        return null;
+    }
+
+    let radius = 6;
+    if (code === 'VAT') radius = 8;
+    if (code === 'SMR') radius = 7;
+    if (code === 'MLT') radius = 7;
+    if (code === 'AND') radius = 7;
+
+    let fillColor = '#3B82F6';
+    let borderColor = '#ffffff';
+
+    if (status === 'correct_1') { fillColor = '#22C55E'; borderColor = '#86EFAC'; }
+    else if (status === 'correct_2') { fillColor = '#F59E0B'; borderColor = '#FCD34D'; }
+    else if (status === 'correct_3') { fillColor = '#F97316'; borderColor = '#FDBA74'; }
+    else if (status === 'failed') { fillColor = '#EF4444'; borderColor = '#FCA5A5'; }
+
+    return (
+        <MapMarker
+            longitude={lng}
+            latitude={lat}
+            onClick={() => {
+                console.log("Clicked Small Country:", code);
+                onGuess(code);
+            }}
+        >
+            <MarkerContent>
+                <div
+                    className="rounded-full transition-all duration-300 hover:scale-125"
+                    style={{
+                        width: radius * 2,
+                        height: radius * 2,
+                        backgroundColor: fillColor,
+                        border: `2px solid ${borderColor}`,
+                        cursor: 'pointer'
+                    }}
+                />
+            </MarkerContent>
+        </MapMarker>
+    );
+}
+
+// Map Controller for fly-to animations and region bounds
+interface MapControllerProps {
+    targetCountry?: { cca3: string } | null;
+    geoJson?: FeatureCollection;
+    isTransitioning?: boolean;
+    region?: string;
+}
+
+function MapController({ targetCountry, geoJson, isTransitioning, region = 'World' }: MapControllerProps) {
+    const { map, isLoaded } = useMap();
+    const initialFitDoneRef = useRef(false);
+    const prevRegionRef = useRef(region);
+    const wasTransitioningRef = useRef(false);
+
+    // Fit to region bounds only on initial load or when region actually changes
+    useEffect(() => {
+        if (!map || !isLoaded) return;
+
+        const bounds = REGION_BOUNDS[region] || REGION_BOUNDS['World'];
+
+        // Only fit on initial load or when region changes
+        if (!initialFitDoneRef.current || prevRegionRef.current !== region) {
+            map.fitBounds(bounds, {
+                padding: 20,
+                duration: initialFitDoneRef.current ? 1000 : 0
+            });
+            initialFitDoneRef.current = true;
+            prevRegionRef.current = region;
+        }
+    }, [map, isLoaded, region]);
+
+    // Handle country zoom during transitions (failed guess reveal)
+    useEffect(() => {
+        if (!map || !isLoaded || !geoJson) return;
+
+        if (isTransitioning && targetCountry) {
+            // Zoom to failed country
+            const feature = geoJson.features.find(f => NormalizeCode(f) === targetCountry.cca3);
+            if (feature) {
+                const [lng, lat] = getFeatureCenter(feature);
+                map.flyTo({
+                    center: [lng, lat],
+                    zoom: 5,
+                    duration: 1500,
+                    essential: true
+                });
+            }
+            wasTransitioningRef.current = true;
+        } else if (!isTransitioning && wasTransitioningRef.current) {
+            // Only return to region bounds after a transition ends
+            wasTransitioningRef.current = false;
+            const bounds = REGION_BOUNDS[region] || REGION_BOUNDS['World'];
+            map.fitBounds(bounds, {
+                padding: 20,
+                duration: 1000
+            });
+        }
+    }, [map, isLoaded, isTransitioning, targetCountry, geoJson, region]);
+
+    return null;
 }
 
 const GameMap = ({ onGuess, countryStatus: propsStatus, overrideTarget, isTransitioning: propsTransitioning }: GameMapProps = {}) => {
     const { geoJson, makeGuess, countryStatus: ctxStatus, filteredCountries, region, isTransitioning: ctxTransitioning, targetCountry: ctxTarget, gameType, gameKey } = useGame();
 
-    // Merge logic: Props take precedence
     const countryStatus = propsStatus || ctxStatus;
     const targetCountry = overrideTarget || ctxTarget;
     const isTransitioning = propsTransitioning !== undefined ? propsTransitioning : ctxTransitioning;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const [bounds, setBounds] = useState<any>(null);
-    const geoJsonRef = useRef<L.GeoJSON>(null);
-    // Ref for countryStatus to avoid closure staleness in event handlers
-    const countryStatusRef = useRef(countryStatus);
-    const smallMarkersRef = useRef<L.CircleMarker[]>([]);
+    // Handler for guesses
+    const handleGuess = useCallback((code: string) => {
+        if (onGuess) {
+            onGuess(code);
+        } else {
+            makeGuess(code);
+        }
+    }, [onGuess, makeGuess]);
 
-    // Update ref when countryStatus changes
-    useEffect(() => {
-        countryStatusRef.current = countryStatus;
+    // Filter GeoJSON based on active countries
+    const filteredData = useMemo((): FeatureCollection | null => {
+        if (!geoJson || !filteredCountries?.length) return null;
 
-        // Update styles of manual markers too
-        smallMarkersRef.current.forEach(marker => {
-            // @ts-ignore
-            const code = marker._code;
-            if (code) {
-                const status = countryStatus[code];
-                let fillColor = '#3B82F6';
-                let color = '#ffffff';
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const validCodes = new Set(filteredCountries.map((c: any) => c.cca3));
 
-                if (status === 'correct_1') { fillColor = '#22C55E'; color = '#86EFAC'; }
-                else if (status === 'correct_2') { fillColor = '#F59E0B'; color = '#FCD34D'; }
-                else if (status === 'correct_3') { fillColor = '#F97316'; color = '#FDBA74'; }
-                else if (status === 'failed') { fillColor = '#EF4444'; color = '#FCA5A5'; }
-
-                marker.setStyle({ fillColor, color });
-            }
-        });
-
-    }, [countryStatus]);
-
-
-
-    // Filter GeoJSON based on active countries (Region Filter)
-    const filteredData = useMemo(() => {
-        if (!geoJson || !filteredCountries || !filteredCountries.length) return null;
-
-        const validCodes = new Set(filteredCountries.map(c => c.cca3));
-
-        // Only force Kosovo if we are in Europe or World mode
-        // Assuming 'filteredCountries' usually contains it if the API returns it, 
-        // but if we need to force it for Europe specifically:
         if (region === 'Europe' || region === 'World') {
             validCodes.add('XKX');
             validCodes.add('KOS');
         }
 
-        // Filter features
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const features = geoJson.features.filter((f: any) => {
+        const features = geoJson.features.filter((f: Feature) => {
             const code = NormalizeCode(f);
             return validCodes.has(code);
         });
 
         return { type: 'FeatureCollection', features };
-    }, [geoJson, filteredCountries]);
+    }, [geoJson, filteredCountries, region]);
 
-    // Cleanup manual markers on unmount or data change
-    useEffect(() => {
-        return () => {
-            smallMarkersRef.current.forEach(m => m.remove());
-            smallMarkersRef.current = [];
-        };
-    }, [filteredData]); // Dependent on data change
-
-    // Effect: Fly to target on Defeat (Transitioning)
-    useEffect(() => {
-        if (isTransitioning && targetCountry && geoJson) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const feature = geoJson.features.find((f: any) => NormalizeCode(f) === targetCountry.cca3);
-            if (feature) {
-                const layer = L.geoJSON(feature);
-                const b = layer.getBounds();
-                if (b.isValid()) {
-                    // eslint-disable-next-line react-hooks/set-state-in-effect
-                    setBounds(b);
-                }
-            }
-        } else {
-            // Reset bounds when not transitioning
-            setBounds(null);
-        }
-    }, [isTransitioning, targetCountry, geoJson]);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const getStyle = useCallback((feature: any) => {
-        const code = NormalizeCode(feature);
-
-        // HIDE original polygon for small countries
-        if (SMALL_COUNTRIES.has(code)) {
-            return { opacity: 0, fillOpacity: 0, interactive: false };
-        }
-
-        // Access latest status from ref
-        const status = countryStatusRef.current[code];
-
-        // Base Style (Unselected)
-        let fillColor = '#121A33'; // Deep Blue (deep)
-        let fillOpacity = 0.5;
-        let color = '#3B82F6'; // Brand Europe (as default border)
-        let weight = 0.5;
-        const dashArray = '1';
-
-        // Dynamic Status Styles
-        if (status === 'correct_1') {
-            fillColor = '#22C55E'; // Success Green
-            fillOpacity = 0.9;
-            color = '#86EFAC';
-            weight = 2;
-        }
-        else if (status === 'correct_2') {
-            fillColor = '#F59E0B'; // Africa Orange (Warning/Gold)
-            fillOpacity = 0.9;
-            color = '#FCD34D';
-            weight = 2;
-        }
-        else if (status === 'correct_3') {
-            fillColor = '#F97316'; // Warning Orange
-            fillOpacity = 0.9;
-            color = '#FDBA74';
-            weight = 2;
-        }
-        else if (status === 'failed') {
-            fillColor = '#EF4444'; // Error Red
-            fillOpacity = 0.9;
-            color = '#FCA5A5';
-            weight = 2;
-        }
-
-        return {
-            fillColor,
-            fillOpacity,
-            weight,
-            opacity: 0.8,
-            color,
-            dashArray,
-            className: 'transition-all duration-300' // Smooth transitions
-        };
-    }, []); // No dependencies needed as it reads from ref
-
-    // Effect to update styles of existing layers when status changes
-    useEffect(() => {
-        if (geoJsonRef.current) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            geoJsonRef.current.eachLayer((layer: any) => {
-                if (layer.feature) {
-                    const style = getStyle(layer.feature);
-                    layer.setStyle(style);
-                }
-            });
-        }
-    }, [countryStatus, getStyle]); // Depend on countryStatus references update
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const onEachFeature = useCallback((feature: any, layer: any) => {
-        const code = NormalizeCode(feature);
-
-        if (!SMALL_COUNTRIES.has(code)) {
-            // Enhanced Interaction Handling
-            layer.on({
-                // Mouse Down: Start tracking for Click vs Drag
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                mousedown: (e: any) => {
-                    layer._downLatLng = e.latlng;
-                },
-
-                // Mouse Up: Validate Click (Distance check)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                mouseup: (e: any) => {
-                    if (!layer._downLatLng) return;
-
-                    // Let's use the robust pixel tracking:
-                    const startPx = layer._map.latLngToContainerPoint(layer._downLatLng);
-                    const endPx = layer._map.latLngToContainerPoint(e.latlng);
-                    const distPx = startPx.distanceTo(endPx);
-
-                    if (distPx > 5) return; // 5 pixels tolerance
-
-                    console.log("Clicked Feature:", feature.properties.ADMIN, "-> Code:", code);
-                    if (code) {
-                        if (onGuess) {
-                            onGuess(code);
-                        } else {
-                            makeGuess(code);
-                        }
-                    }
-                },
-
-                // Hover: Controlled State (No React State)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                mouseover: (e: any) => {
-                    // @ts-ignore
-                    if (propsTransitioning) return; // Don't hover during animations
-
-                    const layer = e.target;
-                    layer._isHovered = true; // Flag for external re-renders to respect
-
-                    layer.setStyle({
-                        weight: 2,
-                        color: '#ffffff',
-                        fillColor: '#3B82F6', // Hover Blue
-                        fillOpacity: 0.6,
-                        dashArray: ''
-                    });
-                    layer.bringToFront();
-                },
-
-                // Mouse Out: Restore
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                mouseout: (e: any) => {
-                    const layer = e.target;
-                    layer._isHovered = false;
-
-                    // Reset to current correct style
-                    const style = getStyle(feature);
-                    layer.setStyle(style);
-                }
-            });
-            return;
-        }
-
-        // Logic for SMALL COUNTRIES
-        // 1. Disable interaction on the polygon/point layer itself to prevent conflicts (e.g., Italy vs San Marino)
-        layer.options.interactive = false;
-        if (layer.setStyle) {
-            layer.setStyle({ opacity: 0, fillOpacity: 0 });
-        }
-
-        const center = getFeatureCenter(feature);
-        const status = countryStatusRef.current[code];
-
-        let radius = 6;
-        if (code === 'VAT') radius = 8;
-        if (code === 'SMR') radius = 7;
-        if (code === 'MLT') radius = 7;
-        if (code === 'AND') radius = 7;
-
-        let fillColor = '#3B82F6';
-        let color = '#ffffff';
-
-        if (status === 'correct_1') { fillColor = '#22C55E'; color = '#86EFAC'; }
-        else if (status === 'correct_2') { fillColor = '#F59E0B'; color = '#FCD34D'; }
-        else if (status === 'correct_3') { fillColor = '#F97316'; color = '#FDBA74'; }
-        else if (status === 'failed') { fillColor = '#EF4444'; color = '#FCA5A5'; }
-
-        // 2. Create independent marker using SVG renderer for fixed size
-        const marker = L.circleMarker(center, {
-            radius,
-            fillColor,
-            color,
-            weight: 2,
-            fillOpacity: 0.9,
-            renderer: L.svg(), // Force SVG to prevent zooming scaling issues
-            interactive: true,
-            bubblingMouseEvents: false
+    // Get small countries for markers (deduplicated by code)
+    const smallCountryFeatures = useMemo(() => {
+        if (!filteredData) return [];
+        const seen = new Set<string>();
+        return filteredData.features.filter((f: Feature) => {
+            const code = NormalizeCode(f);
+            if (!SMALL_COUNTRIES.has(code)) return false;
+            if (seen.has(code)) return false; // Skip duplicates
+            seen.add(code);
+            return true;
         });
+    }, [filteredData]);
 
-        // Attach code to marker for future updates
-        // @ts-ignore
-        marker._code = code;
-
-        marker.on('click', (e) => {
-            L.DomEvent.stopPropagation(e);
-            console.log("Clicked Small Country:", code);
-            if (onGuess) onGuess(code);
-            else makeGuess(code);
-        });
-
-        // Add to map safely
-        const addToMap = () => {
-            if (layer._map) {
-                marker.addTo(layer._map);
-                smallMarkersRef.current.push(marker);
-                // Ensure small markers are on top
-                marker.bringToFront();
-            }
-        };
-
-        if (layer._map) {
-            addToMap();
-        } else {
-            layer.on('add', addToMap);
-        }
-
-    }, [getStyle, onGuess, makeGuess, propsTransitioning]);
-
-    if (!filteredData) return <div className="w-full h-full flex items-center justify-center text-soft-gray animate-pulse font-mono">Initializing Sat-Link...</div>;
+    if (!filteredData) {
+        return (
+            <div className="w-full h-full flex items-center justify-center text-soft-gray animate-pulse font-mono">
+                Initializing Sat-Link...
+            </div>
+        );
+    }
 
     return (
-        <div className="w-full h-full rounded-2xl overflow-hidden border border-brand-europe/30 shadow-[0_0_50px_rgba(59,130,246,0.15)] relative bg-night">
-
+        <div
+            className="w-full h-full rounded-2xl overflow-hidden border border-brand-europe/30 shadow-[0_0_50px_rgba(59,130,246,0.15)] relative bg-night"
+            key={`${region}-${gameType}-${gameKey}`}
+        >
             {/* Grid Overlay */}
             <div className="absolute inset-0 pointer-events-none z-10 bg-[linear-gradient(rgba(59,130,246,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(59,130,246,0.05)_1px,transparent_1px)] bg-[length:40px_40px]"></div>
 
-            <MapContainer
-                center={[20, 0]}
+            <Map
+                center={[0, 20]}
                 zoom={2.5}
-                className="w-full h-full z-0 bg-transparent"
                 minZoom={2}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                maxBounds={[[-90, -180], [90, 180]] as any}
-                preferCanvas={true}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                {...{ updateWhenZooming: false, updateWhenIdle: true } as any}
-                key={region} // Force re-mount ONLY on region change
+                theme="dark"
             >
-                {/* Dark Sci-Fi Tiles */}
-                <TileLayer
-                    url="https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png"
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                    subdomains='abcd'
-                    maxZoom={19}
+                {/* GeoJSON Layer */}
+                <GeoJSONLayer
+                    data={filteredData}
+                    countryStatus={countryStatus}
+                    onGuess={handleGuess}
+                    isTransitioning={isTransitioning}
                 />
 
-                <GeoJSON
-                    ref={geoJsonRef}
-                    key={`${region}-${gameType}-${gameKey}`}
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    data={filteredData as any}
-                    style={getStyle}
-                    onEachFeature={onEachFeature}
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    pointToLayer={(feature: any, latlng: L.LatLng) => {
-                        const code = NormalizeCode(feature);
-                        // If it's a small country, return an invisible marker 
-                        // because onEachFeature will add the "Real" CircleMarker.
-                        if (SMALL_COUNTRIES.has(code)) {
-                            return L.circleMarker(latlng, { radius: 0, opacity: 0, fillOpacity: 0, interactive: false });
-                        }
+                {/* Small Country Markers */}
+                {smallCountryFeatures.map((feature: Feature) => {
+                    const code = NormalizeCode(feature);
+                    return (
+                        <SmallCountryMarker
+                            key={code}
+                            feature={feature}
+                            code={code}
+                            status={countryStatus[code]}
+                            onGuess={handleGuess}
+                        />
+                    );
+                })}
 
-                        // Default behavior for other points (if any)
-                        return L.circleMarker(latlng);
-                    }}
+                {/* Map Controller for animations */}
+                <MapController
+                    targetCountry={targetCountry}
+                    geoJson={geoJson}
+                    isTransitioning={isTransitioning}
+                    region={region}
                 />
-
-                {/* Map Controller handles flying */}
-                <MapController bounds={bounds} />
-            </MapContainer>
+            </Map>
         </div>
     );
 };

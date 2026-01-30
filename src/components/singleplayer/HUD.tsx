@@ -1,17 +1,10 @@
-import { useRef, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useGame } from '../../context/GameContext';
 import ConfirmModal from '../common/ConfirmModal';
 
 const HUD = () => {
-    const { score, targetCountry, gameState, gameType, region, language, exitGame, restartGame } = useGame();
+    const { score, targetCountry, gameState, gameType, region, language, exitGame, restartGame, lives } = useGame();
     const [showExitConfirm, setShowExitConfirm] = useState(false);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const prevScore = useRef<any>(score);
-
-    useEffect(() => {
-        prevScore.current = score;
-    }, [score]);
 
     const LABELS = {
         en: {
@@ -47,88 +40,102 @@ const HUD = () => {
     };
     const t = LABELS[language];
 
+    // Get display name based on language
     const displayName = targetCountry
         ? ((language === 'es' && targetCountry.translations?.spa?.common)
             ? targetCountry.translations.spa.common
             : targetCountry.name?.common)
         : '';
 
+    // Lives indicators
+    const hearts = Array(3).fill(0).map((_, i) => (
+        <span key={i} className={`text-base sm:text-lg transition-all duration-300 ${i < lives ? 'opacity-100' : 'opacity-30 grayscale'}`}>❤️</span>
+    ));
 
     return (
-        <header className="relative z-50 w-full max-w-7xl mx-auto px-8 py-6 flex items-center justify-between pointer-events-none">
-            {/* Left: Exit Button + Retry Button */}
-            <div className="pointer-events-auto flex items-center gap-3 min-w-[180px]">
-                <button
-                    onClick={() => setShowExitConfirm(true)}
-                    className="bg-red-500/20 text-red-400 hover:bg-red-500/40 px-4 py-2.5 rounded-lg text-sm border border-red-500/30 transition-all duration-300 font-bold hover:scale-105"
-                >
-                    {t.EXIT}
-                </button>
+        <>
+            {/* HUD Overlay - Absolute positioned over the map */}
+            <div className="absolute inset-0 pointer-events-none z-20 p-2 sm:p-4 md:p-6">
 
-                {/* Retry Button - Always visible */}
-                <button
-                    onClick={restartGame}
-                    className="bg-amber-500/20 text-amber-400 hover:bg-amber-500/40 px-4 py-2.5 rounded-lg text-sm border border-amber-500/30 transition-all duration-300 font-bold hover:scale-105"
-                >
-                    {t.RETRY}
-                </button>
-            </div>
+                {/* Top Row - Exit/Retry buttons on left, Score/Lives on right */}
+                <div className="flex items-start justify-between">
+                    {/* Left: Exit + Retry */}
+                    <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
+                        <button
+                            onClick={() => setShowExitConfirm(true)}
+                            className="bg-red-500/30 text-red-400 hover:bg-red-500/50 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm border border-red-500/40 transition-all font-bold backdrop-blur-sm"
+                        >
+                            {t.EXIT}
+                        </button>
+                        <button
+                            onClick={restartGame}
+                            className="bg-amber-500/30 text-amber-400 hover:bg-amber-500/50 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm border border-amber-500/40 transition-all font-bold backdrop-blur-sm"
+                        >
+                            {t.RETRY}
+                        </button>
+                    </div>
 
-
-            {/* Center: Target Display (Flag or Name) */}
-            <div className="flex flex-col items-center pointer-events-auto">
-                {targetCountry && (
-                    <div className="relative group perspective-1000">
-                        {gameType === 'flag' ? (
-                            // Flag Mode
-                            <div className="relative w-36 md:w-44 aspect-[3/2] rounded-xl overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.6)] border-2 border-white/15 transform transition-transform duration-500 hover:scale-110 hover:rotate-y-12">
-                                <img
-                                    src={targetCountry.flags.svg}
-                                    alt="Target Flag"
-                                    className="w-full h-full object-cover"
-                                />
-                                <div className="absolute inset-0 bg-gradient-to-tr from-black/20 to-transparent pointer-events-none"></div>
-                            </div>
-                        ) : (
-                            // Name Mode
-                            <div className="relative px-10 py-5 bg-deep/60 backdrop-blur-md border border-brand-europe/30 rounded-xl shadow-[0_0_40px_rgba(59,130,246,0.25)] transform transition-transform duration-500 hover:scale-105">
-                                <h2 className="text-2xl md:text-3xl font-black text-white text-center drop-shadow-[0_0_10px_rgba(255,255,255,0.5)] tracking-wide">
-                                    {displayName.toUpperCase()}
-                                </h2>
-                                <div className="text-[10px] text-brand-europe text-center uppercase tracking-[0.3em] mt-2">
-                                    {t.LOCATE}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Victory/Game Over Overlay (Mini) */}
-                        {gameState === 'won' && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm rounded-xl z-20">
-                                <span className="text-emerald-400 font-bold uppercase animate-pulse text-lg">{t.SUCCESS}</span>
-                            </div>
-                        )}
-                        {gameState === 'lost' && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm rounded-xl z-20">
-                                <span className="text-red-400 font-bold uppercase text-lg">{t.FAILED}</span>
-                            </div>
-                        )}
-
-                        {/* Region Badge */}
-                        <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 px-3 py-1 bg-deep/80 border border-white/10 rounded-lg text-[11px] uppercase text-soft-gray whitespace-nowrap backdrop-blur-sm">
-                            {region === 'World' ? t.GLOBAL : region.toUpperCase()}
+                    {/* Right: Score + Lives */}
+                    <div className="pointer-events-auto flex items-center gap-2 sm:gap-3">
+                        {/* Lives */}
+                        <div className="flex items-center gap-0.5 bg-deep/70 backdrop-blur-sm px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg border border-white/10">
+                            {hearts}
+                        </div>
+                        {/* Score */}
+                        <div className="flex items-center gap-1.5 bg-deep/70 backdrop-blur-sm px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg border border-white/10">
+                            <span className="text-base sm:text-lg">🏆</span>
+                            <span className="text-sm sm:text-base text-soft-gray font-mono font-bold">{score}</span>
                         </div>
                     </div>
-                )}
-                {!targetCountry && gameState === 'loading' && (
-                    <div className="text-slate-500 animate-pulse text-lg">{t.LOADING}</div>
-                )}
-            </div>
+                </div>
 
-            {/* Right: Score Display */}
-            <div className="min-w-[180px] pointer-events-auto text-right">
-                <div className="inline-flex items-center gap-2 bg-deep/60 backdrop-blur-sm px-4 py-2.5 rounded-lg border border-white/10">
-                    <span className="text-lg">🏆</span>
-                    <span className="text-base text-soft-gray font-mono font-bold">{score}</span>
+                {/* Center: Target Display */}
+                <div className="absolute left-1/2 -translate-x-1/2 top-2 sm:top-4 md:top-6 pointer-events-auto">
+                    {targetCountry && (
+                        <div className="relative group">
+                            {gameType === 'flag' ? (
+                                // Flag Mode
+                                <div className="relative w-20 sm:w-28 md:w-36 aspect-[3/2] rounded-lg sm:rounded-xl overflow-hidden shadow-[0_0_30px_rgba(0,0,0,0.5)] border-2 border-white/20 transition-transform duration-300 hover:scale-105">
+                                    <img
+                                        src={targetCountry.flags.svg}
+                                        alt="Target Flag"
+                                        className="w-full h-full object-cover"
+                                    />
+                                    <div className="absolute inset-0 bg-gradient-to-tr from-black/20 to-transparent pointer-events-none"></div>
+                                </div>
+                            ) : (
+                                // Name Mode
+                                <div className="relative px-4 sm:px-6 md:px-8 py-2 sm:py-3 md:py-4 bg-deep/80 backdrop-blur-md border border-brand-europe/40 rounded-lg sm:rounded-xl shadow-[0_0_30px_rgba(59,130,246,0.3)]">
+                                    <h2 className="text-base sm:text-xl md:text-2xl font-black text-white text-center drop-shadow-[0_0_8px_rgba(255,255,255,0.4)] tracking-wide">
+                                        {displayName.toUpperCase()}
+                                    </h2>
+                                    <div className="text-[8px] sm:text-[10px] text-brand-europe text-center uppercase tracking-widest mt-1">
+                                        {t.LOCATE}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Victory/Game Over Overlay */}
+                            {gameState === 'won' && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm rounded-lg sm:rounded-xl z-20">
+                                    <span className="text-emerald-400 font-bold uppercase animate-pulse text-sm sm:text-lg">{t.SUCCESS}</span>
+                                </div>
+                            )}
+                            {gameState === 'lost' && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm rounded-lg sm:rounded-xl z-20">
+                                    <span className="text-red-400 font-bold uppercase text-sm sm:text-lg">{t.FAILED}</span>
+                                </div>
+                            )}
+
+                            {/* Region Badge */}
+                            <div className="absolute -bottom-5 sm:-bottom-6 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-deep/80 border border-white/10 rounded text-[9px] sm:text-[10px] uppercase text-soft-gray whitespace-nowrap backdrop-blur-sm">
+                                {region === 'World' ? t.GLOBAL : region.toUpperCase()}
+                            </div>
+                        </div>
+                    )}
+                    {!targetCountry && gameState === 'loading' && (
+                        <div className="text-slate-500 animate-pulse text-sm sm:text-lg">{t.LOADING}</div>
+                    )}
                 </div>
             </div>
 
@@ -146,7 +153,7 @@ const HUD = () => {
                 }}
                 onCancel={() => setShowExitConfirm(false)}
             />
-        </header>
+        </>
     );
 };
 

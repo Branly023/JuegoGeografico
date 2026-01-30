@@ -7,7 +7,7 @@ import ConfirmModal from '../common/ConfirmModal';
 
 const MultiplayerGame: React.FC = () => {
     const { gameState, players, submitAnswer, leaveRoom, guessedCountries, failedCountryAnimation } = useMultiplayer();
-    const { filteredCountries } = useGame(); // Use this to lookup country details
+    const { filteredCountries, language } = useGame();
     const { user } = useAuth();
     const [showSurrenderConfirm, setShowSurrenderConfirm] = useState(false);
 
@@ -27,49 +27,36 @@ const MultiplayerGame: React.FC = () => {
 
     const [interstitial, setInterstitial] = React.useState<string | null>(null);
 
-    // Audio Refs (Simple oscillator beeps for now or placeholder) (Optional, keeping simple visual first)
-    // To make it cool we need assets, but we can do a visual countdown first.
-
-    // Track the last turn we triggered the animation for to prevent re-runs/loops
+    // Track the last turn we triggered the animation for
     const lastTurnRef = React.useRef<string | null>(null);
 
     // Effect: Trigger 3-2-1 on turn change
     React.useEffect(() => {
         if (!gameState?.current_turn) return;
 
-        // Only run if the turn has actually CHANGED from what we last saw
         if (lastTurnRef.current === gameState.current_turn) {
             return;
         }
 
-        // Update ref
         lastTurnRef.current = gameState.current_turn;
 
         console.log("🎬 Triggering Interstitial for turn:", gameState.current_turn);
 
-        // Start Sequence
         setInterstitial('3');
         const t1 = setTimeout(() => setInterstitial('2'), 1000);
         const t2 = setTimeout(() => setInterstitial('1'), 2000);
 
-        // Resolve Player Name
         const playerForTurn = players.find(p => p.player_id === gameState.current_turn);
         const name = playerForTurn?.profile?.username || 'Jugador';
         const finalMsg = (user?.id === gameState.current_turn) ? '¡TU TURNO!' : `Turno de ${name}`;
 
         const t3 = setTimeout(() => setInterstitial(finalMsg), 3000);
-        const t4 = setTimeout(() => setInterstitial(null), 4500); // 1.5s reading time
+        const t4 = setTimeout(() => setInterstitial(null), 4500);
 
         return () => {
             clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4);
         };
-    }, [gameState?.current_turn, players, user?.id]); // Added deps
-
-    // Debug Mount
-    React.useEffect(() => {
-        console.log("🔄 MultiplayerGame Mounted");
-    }, []);
-
+    }, [gameState?.current_turn, players, user?.id]);
 
     // Derived state
     const currentTurnPlayer = useMemo(() => {
@@ -82,10 +69,16 @@ const MultiplayerGame: React.FC = () => {
     const targetCountryCode = gameState?.current_question?.country;
     const targetCountry = useMemo(() => {
         if (!targetCountryCode || !filteredCountries) return null;
-        // Try to match cca3 or name
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return filteredCountries.find((c: any) => c.cca3 === targetCountryCode || c.name.common === targetCountryCode);
     }, [targetCountryCode, filteredCountries]);
+
+    // Get display name based on language
+    const displayName = targetCountry
+        ? ((language === 'es' && targetCountry.translations?.spa?.common)
+            ? targetCountry.translations.spa.common
+            : targetCountry.name?.common)
+        : '';
 
     // Convert guessedCountries to countryStatus format for GameMap
     const countryStatus = useMemo(() => {
@@ -93,14 +86,8 @@ const MultiplayerGame: React.FC = () => {
         Object.entries(guessedCountries).forEach(([code, result]) => {
             status[code] = result === 'correct' ? 'correct_1' : 'failed';
         });
-
-        // NOTE: We do NOT merge failedCountryAnimation here anymore.
-        // The failed state comes from the 'all_failed' invalid move history (via guessedCountries).
-        // failedCountryAnimation is used ONLY for the overlay.
-
         return status;
     }, [guessedCountries]);
-
 
     // Resolve Failed Country Object for Animation
     const failedCountryObject = useMemo(() => {
@@ -108,7 +95,6 @@ const MultiplayerGame: React.FC = () => {
         // @ts-ignore
         return filteredCountries.find((c: any) => c.cca3 === failedCountryAnimation);
     }, [failedCountryAnimation, filteredCountries]);
-
 
     // Handle Guess (Stable Callback)
     const handleGuess = React.useCallback(async (code: string) => {
@@ -118,56 +104,29 @@ const MultiplayerGame: React.FC = () => {
 
         console.log(`🌍 Map Clicked: ${code}`);
 
-        // Checks using REFS to avoid re-creation
         if (!currentUser) { console.log("Blocked: No User"); return; }
         if (!currentGameState) { console.log("Blocked: No Game State"); return; }
 
-        // Check Turn
         const isTurn = currentUser.id === currentGameState.current_turn;
         console.log(`👤 User: ${currentUser.id}, Turn: ${currentGameState.current_turn}, IsTurn: ${isTurn}`);
 
         if (!isTurn) { console.log("Blocked: Not My Turn"); return; }
 
-        // Prevent clicking on already guessed
         if (currentGuessed[code]) {
             console.log(`Country ${code} already guessed, ignoring.`);
             return;
         }
 
-        // Target
         const targetCode = currentGameState.current_question?.country;
-
-        // Verify answer
-        // Note: filteredCountries is from GameContext, assuming it doesn't change often. 
-        // If it does, we might need a ref for it too, but it's usually static list.
-        // For strict correctness we verify mostly against targetCode.
-
-        // Simplified verification to avoid dependency on filteredCountries inside callback if possible, 
-        // strictly checking code vs targetCode for core logic, but existing logic used names too.
-        // We will stick to code check for now or assume filteredCountries is stable enough (it comes from context).
-        // Actually, filteredCountries IS potentially stable (loaded once). 
-
         const isCorrect = code === targetCode;
 
         console.log(`Guessed: ${code}, Target: ${targetCode}, Correct: ${isCorrect}`);
 
-        // Generate next question candidate (always needed in case this guess triggers "All Failed" rotation)
         let nextQuestion = undefined;
         if (filteredCountries && filteredCountries.length > 0) {
-            // Build a set of all countries that should be excluded:
-            // 1. Countries already in currentGuessed (from state)
-            // 2. The current target (which will be marked as correct/failed after this)
-            // 3. If this guess is correct, include it too (since state hasn't updated yet)
             const excludedCountries = new Set<string>();
-
-            // Add all countries from guessedCountries state
             Object.keys(currentGuessed).forEach(code => excludedCountries.add(code));
-
-            // Always exclude current target
             if (targetCode) excludedCountries.add(targetCode);
-
-            // If this is a correct guess, also exclude the guessed country
-            // (which is the same as targetCode, but being explicit for clarity)
             if (isCorrect && code) excludedCountries.add(code);
 
             const availableCountries = filteredCountries.filter(
@@ -183,26 +142,21 @@ const MultiplayerGame: React.FC = () => {
         await submitAnswer({
             isCorrect,
             guessedCountry: code,
-            nextQuestion, // Always pass a candidate
+            nextQuestion,
             turnAtClick: currentGameState.current_turn
         });
 
-    }, [submitAnswer, filteredCountries]); // Added filteredCountries dependency
+    }, [submitAnswer, filteredCountries]);
 
-    // Handle Timeout (Moved from Context to here to access filteredCountries)
-    // Handle Timeout (Moved from Context to here to access filteredCountries)
-    React.useEffect(() => {
-        if (!gameState || !isMyTurn) return;
-
-        // Note: Client-side timeout display removed as per new logic.
-        // If we want auto-submit on timeout, we should rely on server time or a separate local timer if explicitly requested.
-        // For now, removing the broken 'time_left' check solves the build.
-    }, [isMyTurn, gameState]);
-
-    if (!gameState) return <div>Loading Game State...</div>;
+    if (!gameState) return <div className="w-full h-screen bg-night flex items-center justify-center text-white">Loading Game State...</div>;
 
     return (
-        <div className="w-full h-screen bg-night text-white flex flex-col relative">
+        <div className="w-full h-screen bg-night text-white flex flex-col relative overflow-hidden">
+            {/* Background Gradients */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-brand-europe/10 blur-[150px] rounded-full mix-blend-screen"></div>
+                <div className="absolute top-0 right-0 w-[50vw] h-[50vw] bg-brand-americas/5 blur-[120px] rounded-full mix-blend-screen"></div>
+            </div>
 
             {/* INTERSTITIAL OVERLAY */}
             {interstitial && (
@@ -216,79 +170,83 @@ const MultiplayerGame: React.FC = () => {
             {/* Background Music */}
             <audio autoPlay loop>
                 <source src="/music/background_loop.mp3" type="audio/mp3" />
-                Your browser does not support the audio element.
             </audio>
 
-            {/* Top Bar: HUD */}
-            <header className="px-6 py-4 bg-deep/80 border-b border-white/10 flex justify-between items-center z-50">
-                <div className="flex items-center gap-4">
-                    <div className="text-2xl font-black text-brand-europe">MAP BATTLE</div>
-                    {/* Timer Removed */}
-                </div>
+            {/* Main Content - Rectangular Map */}
+            <main className="flex-1 w-full max-w-[1600px] mx-auto px-2 sm:px-4 py-2 sm:py-4 flex flex-col relative z-10">
+                <div className="relative w-full flex-1 md:flex-none md:aspect-video rounded-xl overflow-hidden shadow-2xl border border-white/10">
 
-                <div className="flex-1 flex justify-center">
-                    {targetCountry ? (
-                        <div className="text-center animate-pulse">
-                            <span className="text-sm text-soft-gray block">LOCALIZA</span>
-                            {/* Check if flag property exists or handle generic */}
-                            <span className="text-xl md:text-3xl font-black text-white">
-                                {targetCountry.name?.common || targetCountryCode}
-                                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                                {(targetCountry as any).flag}
-                            </span>
-                        </div>
-                    ) : (
-                        <div className="text-soft-gray">Preparando siguiente objetivo...</div>
-                    )}
-                </div>
+                    {/* HUD Overlay */}
+                    <div className="absolute inset-0 pointer-events-none z-20 p-2 sm:p-4">
 
-                <div className="flex items-center gap-4">
-                    <div className={`text-right ${isMyTurn ? 'text-brand-europe font-bold' : 'text-soft-gray'}`}>
-                        {isMyTurn
-                            ? "TU TURNO"
-                            : `Turno de: ${currentTurnPlayer ? (currentTurnPlayer.profile?.username || 'Jugador') : '...'}`}
-                    </div>
-                    <button
-                        onClick={() => setShowSurrenderConfirm(true)}
-                        className="bg-red-500/20 text-red-400 hover:bg-red-500/40 px-3 py-1 rounded text-xs border border-red-500/30 transition-colors"
-                    >
-                        RENDIRSE
-                    </button>
-                </div>
-            </header>
-
-            {/* Main Content: Map + Sidebar */}
-            <div className="flex-1 flex overflow-hidden">
-                {/* Players Sidebar (Left) */}
-                <aside className="w-64 bg-deep/50 border-r border-white/5 p-4 overflow-y-auto hidden md:block">
-                    <h3 className="font-bold mb-4 text-sm text-soft-gray uppercase tracking-wider">Jugadores</h3>
-                    <div className="space-y-3">
-                        {players.map(p => (
-                            <div key={p.player_id} className={`p-3 rounded-lg border flex items-center gap-3 transition-colors ${gameState.current_turn === p.player_id
-                                ? 'bg-brand-europe/20 border-brand-europe/50'
-                                : 'bg-white/5 border-white/10'
-                                }`}>
-                                <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center overflow-hidden">
-                                    {p.profile?.avatar_url ? (
-                                        <img src={p.profile.avatar_url} alt="" className="w-full h-full object-cover" />
-                                    ) : (
-                                        <span className="text-xs font-bold">{(p.profile?.username?.[0] || '?').toUpperCase()}</span>
-                                    )}
+                        {/* Top Row - Surrender button on left, Turn info + Players on right */}
+                        <div className="flex items-start justify-between">
+                            {/* Left: Title + Surrender */}
+                            <div className="pointer-events-auto flex items-center gap-2">
+                                <div className="hidden sm:block text-lg font-black text-brand-europe bg-deep/70 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-brand-europe/30">
+                                    MAP BATTLE
                                 </div>
-                                <div className="flex-1">
-                                    <div className="font-bold text-sm truncate">{p.profile?.username || 'Anónimo'}</div>
-                                    <div className="flex justify-between text-xs text-soft-gray mt-1">
-                                        <span>❤️ {p.lives}</span>
-                                        <span>🏆 {p.score}</span>
-                                    </div>
+                                <button
+                                    onClick={() => setShowSurrenderConfirm(true)}
+                                    className="bg-red-500/30 text-red-400 hover:bg-red-500/50 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm border border-red-500/40 transition-all font-bold backdrop-blur-sm"
+                                >
+                                    RENDIRSE
+                                </button>
+                            </div>
+
+                            {/* Right: Turn Info + Players */}
+                            <div className="pointer-events-auto flex items-center gap-2">
+                                {/* Turn Indicator */}
+                                <div className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold backdrop-blur-sm border ${isMyTurn
+                                    ? 'bg-brand-europe/30 border-brand-europe/50 text-brand-europe'
+                                    : 'bg-deep/70 border-white/10 text-soft-gray'}`}>
+                                    {isMyTurn
+                                        ? "TU TURNO"
+                                        : `${currentTurnPlayer?.profile?.username || 'Jugador'}...`}
+                                </div>
+
+                                {/* Players Mini List */}
+                                <div className="hidden md:flex items-center gap-1 bg-deep/70 backdrop-blur-sm px-2 py-1.5 rounded-lg border border-white/10">
+                                    {players.map(p => (
+                                        <div
+                                            key={p.player_id}
+                                            className={`flex items-center gap-1 px-2 py-0.5 rounded ${gameState.current_turn === p.player_id ? 'bg-brand-europe/30' : ''
+                                                }`}
+                                        >
+                                            <span className="text-[10px]">❤️{p.lives}</span>
+                                            <span className="text-[10px]">🏆{p.score}</span>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
-                        ))}
-                    </div>
-                </aside>
+                        </div>
 
-                {/* Map Area */}
-                <main className="flex-1 relative">
+                        {/* Center: Target Display */}
+                        <div className="absolute left-1/2 -translate-x-1/2 top-2 sm:top-4 pointer-events-auto">
+                            {targetCountry && (
+                                <div className="relative">
+                                    <div className="relative w-20 sm:w-28 md:w-36 aspect-[3/2] rounded-lg sm:rounded-xl overflow-hidden shadow-[0_0_30px_rgba(0,0,0,0.5)] border-2 border-white/20">
+                                        <img
+                                            src={targetCountry.flags?.svg}
+                                            alt="Target Flag"
+                                            className="w-full h-full object-cover"
+                                        />
+                                        <div className="absolute inset-0 bg-gradient-to-tr from-black/20 to-transparent pointer-events-none"></div>
+                                    </div>
+                                    <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-deep/80 border border-white/10 rounded text-[9px] sm:text-[10px] uppercase text-soft-gray whitespace-nowrap backdrop-blur-sm">
+                                        {displayName}
+                                    </div>
+                                </div>
+                            )}
+                            {!targetCountry && (
+                                <div className="text-slate-500 animate-pulse text-sm bg-deep/70 backdrop-blur-sm px-4 py-2 rounded-lg">
+                                    Preparando...
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Map */}
                     <GameMap
                         onGuess={handleGuess}
                         overrideTarget={failedCountryObject || targetCountry}
@@ -311,20 +269,19 @@ const MultiplayerGame: React.FC = () => {
                         </div>
                     )}
 
-                    {/* Turn Indicator Overlay (Mobile/Visual) & Interaction Blocker */}
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none">
-                        {!isMyTurn && !interstitial && !failedCountryAnimation && (
-                            <div className="bg-black/60 backdrop-blur text-white px-4 py-2 rounded-full text-sm border border-white/10">
-                                Espera tu turno
+                    {/* Wait Turn Indicator */}
+                    {!isMyTurn && !interstitial && !failedCountryAnimation && (
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none">
+                            <div className="bg-black/70 backdrop-blur text-white px-4 py-2 rounded-full text-sm border border-white/20">
+                                Espera tu turno...
                             </div>
-                        )}
-                    </div>
+                        </div>
+                    )}
 
-                    {/* Hard Interaction Blocker for Non-Turn Players */}
+                    {/* Interaction Blocker */}
                     {(!isMyTurn || !!interstitial || !!failedCountryAnimation) && (
                         <div
                             className="absolute inset-0 z-50 bg-transparent cursor-not-allowed"
-                            // Block ALL pointer events to prevent Leaflet from catching them
                             onMouseDown={(e) => e.stopPropagation()}
                             onMouseUp={(e) => e.stopPropagation()}
                             onTouchStart={(e) => e.stopPropagation()}
@@ -337,16 +294,16 @@ const MultiplayerGame: React.FC = () => {
                             onWheel={(e) => e.stopPropagation()}
                         />
                     )}
-                </main>
-            </div>
+                </div>
+            </main>
 
             {/* Surrender Confirmation Modal */}
             <ConfirmModal
                 isOpen={showSurrenderConfirm}
                 title="¿Rendirse?"
-                message="Perderás todos tus puntos y se te contará como derrota. ¿Estás seguro de que deseas abandonar la partida?"
+                message="Perderás todos tus puntos y se te contará como derrota. ¿Estás seguro?"
                 confirmText="Sí, Rendirse"
-                cancelText="Continuar Luchando"
+                cancelText="Continuar"
                 variant="danger"
                 onConfirm={() => {
                     leaveRoom();
