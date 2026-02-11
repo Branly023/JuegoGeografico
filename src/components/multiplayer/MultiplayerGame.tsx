@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { Heart, Trophy } from 'lucide-react';
 import { useMultiplayer } from '../../context/MultiplayerContext';
 import { useGame } from '../../context/GameContext';
 import { useAuth } from '../../context/AuthContext';
@@ -206,15 +207,22 @@ const MultiplayerGame: React.FC = () => {
                                 </div>
 
                                 {/* Players Mini List */}
-                                <div className="hidden md:flex items-center gap-1 bg-deep/70 backdrop-blur-sm px-2 py-1.5 rounded-lg border border-white/10">
+                                <div className="hidden md:flex items-center gap-2 bg-deep/70 backdrop-blur-sm px-2 py-1.5 rounded-lg border border-white/10">
                                     {players.map(p => (
                                         <div
                                             key={p.player_id}
-                                            className={`flex items-center gap-1 px-2 py-0.5 rounded ${gameState.current_turn === p.player_id ? 'bg-brand-europe/30' : ''
+                                            className={`flex items-center gap-2 px-2 py-1 rounded-md transition-colors ${gameState.current_turn === p.player_id ? 'bg-brand-europe/30 ring-1 ring-brand-europe/50' : 'bg-white/5'
                                                 }`}
                                         >
-                                            <span className="text-[10px]">❤️{p.lives}</span>
-                                            <span className="text-[10px]">🏆{p.score}</span>
+                                            <div className="flex items-center gap-1 text-red-400" title="Vidas">
+                                                <Heart className="w-3 h-3 fill-current" />
+                                                <span className="text-[10px] font-bold">{p.lives}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 text-yellow-400" title="Puntos">
+                                                <Trophy className="w-3 h-3 fill-current" />
+                                                <span className="text-[10px] font-bold">{p.score}</span>
+                                            </div>
+                                            <span className="text-[10px] text-soft-gray truncate max-w-[60px]">{p.profile?.username}</span>
                                         </div>
                                     ))}
                                 </div>

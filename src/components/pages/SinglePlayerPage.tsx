@@ -1,11 +1,26 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import Header from '../layout/Header';
 import HUD from '../singleplayer/HUD';
 import GameMap from '../map/GameMap';
 import AuthModal from '../auth/AuthModal';
+import { useGame } from '../../context/GameContext';
 
 const GameLayout = () => {
     const [showAuthModal, setShowAuthModal] = useState(false);
+    const location = useLocation();
+    const { startGame, geoJson } = useGame();
+    const initializedRef = useRef(false);
+
+    // Initialize game when data is ready
+    useEffect(() => {
+        if (geoJson && !initializedRef.current) {
+            const { mode, region } = location.state || { mode: 'flag', region: 'World' };
+            console.log("Starting game with:", mode, region);
+            startGame({ mode, region });
+            initializedRef.current = true;
+        }
+    }, [geoJson, location.state, startGame]);
 
     return (
         <div className="relative w-full h-full min-h-screen overflow-hidden bg-night text-soft-white flex flex-col font-sans">

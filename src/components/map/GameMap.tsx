@@ -216,45 +216,54 @@ function GeoJSONLayer({ data, countryStatus, onGuess, isTransitioning }: GeoJSON
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const lineColorExpression: any[] = ['match', codeExpression];
 
-        Object.entries(countryStatus).forEach(([code, status]) => {
-            let fillColor = '#121A33';
-            let lineColor = '#3B82F6';
+        const hasStatus = Object.keys(countryStatus).length > 0;
 
-            if (status === 'correct_1') { fillColor = '#22C55E'; lineColor = '#86EFAC'; }
-            else if (status === 'correct_2') { fillColor = '#F59E0B'; lineColor = '#FCD34D'; }
-            else if (status === 'correct_3') { fillColor = '#F97316'; lineColor = '#FDBA74'; }
-            else if (status === 'failed') { fillColor = '#EF4444'; lineColor = '#FCA5A5'; }
+        if (hasStatus) {
+            Object.entries(countryStatus).forEach(([code, status]) => {
+                let fillColor = '#121A33';
+                let lineColor = '#3B82F6';
 
-            // Add the normalized code
-            fillColorExpression.push(code, fillColor);
-            lineColorExpression.push(code, lineColor);
+                if (status === 'correct_1') { fillColor = '#22C55E'; lineColor = '#86EFAC'; }
+                else if (status === 'correct_2') { fillColor = '#F59E0B'; lineColor = '#FCD34D'; }
+                else if (status === 'correct_3') { fillColor = '#F97316'; lineColor = '#FDBA74'; }
+                else if (status === 'failed') { fillColor = '#EF4444'; lineColor = '#FCA5A5'; }
 
-            // Also add any raw GeoJSON codes that map to this normalized code
-            const rawCodes = REVERSE_CODE_MAPPING[code];
-            if (rawCodes) {
-                rawCodes.forEach(rawCode => {
-                    fillColorExpression.push(rawCode, fillColor);
-                    lineColorExpression.push(rawCode, lineColor);
-                });
-            }
-        });
+                // Add the normalized code
+                fillColorExpression.push(code, fillColor);
+                lineColorExpression.push(code, lineColor);
 
-        // Default values
-        fillColorExpression.push('#121A33');
-        lineColorExpression.push('#3B82F6');
+                // Also add any raw GeoJSON codes that map to this normalized code
+                const rawCodes = REVERSE_CODE_MAPPING[code];
+                if (rawCodes) {
+                    rawCodes.forEach(rawCode => {
+                        fillColorExpression.push(rawCode, fillColor);
+                        lineColorExpression.push(rawCode, lineColor);
+                    });
+                }
+            });
+
+            // Default values
+            fillColorExpression.push('#121A33');
+            lineColorExpression.push('#3B82F6');
+        }
+
+        // Check if we have enough arguments (match, input, at least one case, default)
+        // Length should be >= 5 (match, input, key, value, default)
+        // If we have just match, input, default (length 3), it's invalid for some MapLibre versions/validations
+        const isValidExpression = fillColorExpression.length >= 4;
 
         try {
             map.setPaintProperty(fillLayerId, 'fill-color', [
                 'case',
                 ['boolean', ['feature-state', 'hover'], false],
                 '#3B82F6', // hover color
-                fillColorExpression
+                isValidExpression ? fillColorExpression : '#121A33'
             ]);
             map.setPaintProperty(lineLayerId, 'line-color', [
                 'case',
                 ['boolean', ['feature-state', 'hover'], false],
                 '#ffffff', // hover color
-                lineColorExpression
+                isValidExpression ? lineColorExpression : '#3B82F6'
             ]);
         } catch (e) {
             console.warn('Failed to update layer colors:', e);

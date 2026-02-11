@@ -9,7 +9,7 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ onLoginClick }) => {
     const { user } = useAuth();
-    const { score, lives, language, setLanguage } = useGame();
+    const { language, setLanguage } = useGame();
 
     return (
         <header className="w-full h-16 bg-night/80 backdrop-blur-md border-b border-soft-white/5 flex items-center justify-between px-6 z-50 relative shrink-0">
@@ -23,22 +23,8 @@ const Header: React.FC<HeaderProps> = ({ onLoginClick }) => {
                 </h1>
             </div>
 
-            {/* Middle: Game Stats (Mobile/Desktop friendly) */}
-            <div className="flex items-center gap-6">
-                <div className="flex flex-col items-center">
-                    <span className="text-[10px] uppercase font-bold text-soft-gray tracking-wider">Score</span>
-                    <span className="text-xl font-mono font-bold text-brand-americas">{score}</span>
-                </div>
-                <div className="w-px h-8 bg-white/10"></div>
-                <div className="flex flex-col items-center">
-                    <span className="text-[10px] uppercase font-bold text-soft-gray tracking-wider">Lives</span>
-                    <div className="flex gap-1 mt-1">
-                        {[...Array(3)].map((_, i) => (
-                            <div key={i} className={`w-2 h-2 rounded-full ${i < lives ? 'bg-brand-asia shadow-brand-asia/50 shadow-sm' : 'bg-white/10'}`}></div>
-                        ))}
-                    </div>
-                </div>
-            </div>
+            {/* Middle: Brand / Title (Centered on mobile if needed, or keeping structure) */}
+            <div className="flex-1"></div>
 
             {/* Right: Language & User Auth */}
             <div className="flex items-center gap-4">

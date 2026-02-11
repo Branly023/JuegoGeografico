@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useGame } from '../../context/GameContext';
 import ConfirmModal from '../common/ConfirmModal';
+import { Heart, Trophy } from 'lucide-react';
 
 const HUD = () => {
     const { score, targetCountry, gameState, gameType, region, language, exitGame, restartGame, lives } = useGame();
@@ -49,7 +50,10 @@ const HUD = () => {
 
     // Lives indicators
     const hearts = Array(3).fill(0).map((_, i) => (
-        <span key={i} className={`text-base sm:text-lg transition-all duration-300 ${i < lives ? 'opacity-100' : 'opacity-30 grayscale'}`}>❤️</span>
+        <Heart
+            key={i}
+            className={`w-5 h-5 transition-all duration-300 ${i < lives ? 'text-red-500 fill-red-500' : 'text-white/20'}`}
+        />
     ));
 
     return (
@@ -78,12 +82,12 @@ const HUD = () => {
                     {/* Right: Score + Lives */}
                     <div className="pointer-events-auto flex items-center gap-2 sm:gap-3">
                         {/* Lives */}
-                        <div className="flex items-center gap-0.5 bg-deep/70 backdrop-blur-sm px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg border border-white/10">
+                        <div className="flex items-center gap-1 bg-deep/70 backdrop-blur-sm px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg border border-white/10">
                             {hearts}
                         </div>
                         {/* Score */}
                         <div className="flex items-center gap-1.5 bg-deep/70 backdrop-blur-sm px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg border border-white/10">
-                            <span className="text-base sm:text-lg">🏆</span>
+                            <Trophy className="w-5 h-5 text-yellow-500" />
                             <span className="text-sm sm:text-base text-soft-gray font-mono font-bold">{score}</span>
                         </div>
                     </div>
